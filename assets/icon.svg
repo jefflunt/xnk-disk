@@ -1,0 +1,44 @@
+<svg width="1024" height="1024" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#141417"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </linearGradient>
+    <radialGradient id="spot1" cx="25%" cy="18%" r="70%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.09"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glowBlue1" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- macOS Squircle Base -->
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg1)" stroke="rgba(214,235,253,0.24)" stroke-width="2.5"/>
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#spot1)"/>
+
+  <!-- Col 0: Disk Root (Primary Blue Used + Available Obsidian) -->
+  <rect x="40" y="44" width="38" height="122" rx="6" fill="#2f81f7" filter="url(#glowBlue1)"/>
+  <rect x="40" y="172" width="38" height="40" rx="6" fill="#1c1c21" stroke="rgba(255,255,255,0.12)" stroke-width="1.5"/>
+
+  <!-- Col 1: Depth 1 (Blue Primary + Orange Contrast Accent) -->
+  <rect x="86" y="44" width="38" height="80" rx="6" fill="#2f81f7" opacity="0.82"/>
+  <rect x="86" y="130" width="38" height="36" rx="6" fill="#ff7722" opacity="0.92"/>
+
+  <!-- Col 2: Depth 2 -->
+  <rect x="132" y="44" width="38" height="50" rx="6" fill="#2f81f7" opacity="0.62"/>
+  <rect x="132" y="100" width="38" height="24" rx="5" fill="#27272a" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+  <rect x="132" y="130" width="38" height="22" rx="5" fill="#ff7722" opacity="0.64"/>
+
+  <!-- Col 3: Depth 3 -->
+  <rect x="178" y="44" width="38" height="30" rx="5" fill="#2f81f7" opacity="0.44"/>
+  <rect x="178" y="80" width="38" height="14" rx="4" fill="#27272a" stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+  <rect x="178" y="130" width="38" height="13" rx="4" fill="#ff7722" opacity="0.42"/>
+
+  <!-- Emerald Status LED -->
+  <circle cx="206" cy="202" r="5" fill="#10b981"/>
+</svg>

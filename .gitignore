@@ -1,0 +1,9 @@
+# Build artifacts
+dist/
+xnk-disk
+XNK Disk
+
+# macOS & temporary files
+.DS_Store
+assets/AppIcon.iconset/
+*.tmp
