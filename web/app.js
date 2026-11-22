@@ -128,6 +128,7 @@
     state.currentPath = state.treeData.root.path;
     state.viewMode = 'icicle';
     state.vZoom = 1;
+    targetVZoom = 1;
     elViewport.scrollTop = 0;
     renderAll();
   }
@@ -598,25 +599,28 @@
   }
 
   let zoomRafId = null;
-  let pendingZoom = null;
+  let targetVZoom = 1;
+  let pendingAnchorY = null;
 
   function scheduleVerticalZoom(nextZoom, anchorClientY) {
-    const clamped = Math.min(MAX_VZOOM, Math.max(MIN_VZOOM, nextZoom));
-    pendingZoom = { zoom: clamped, anchorClientY };
+    targetVZoom = Math.min(MAX_VZOOM, Math.max(MIN_VZOOM, nextZoom));
+    if (typeof anchorClientY === 'number') {
+      pendingAnchorY = anchorClientY;
+    }
     if (zoomRafId !== null) return;
     zoomRafId = requestAnimationFrame(() => {
       zoomRafId = null;
-      const req = pendingZoom;
-      pendingZoom = null;
-      if (!req || state.viewMode !== 'icicle' || !state.treeData) return;
+      if (state.viewMode !== 'icicle' || !state.treeData) return;
       const oldZoom = state.vZoom;
-      const newZoom = req.zoom;
-      if (Math.abs(newZoom - oldZoom) < 0.005) return;
+      const newZoom = targetVZoom;
+      const anchorClient = pendingAnchorY;
+      pendingAnchorY = null;
+      if (Math.abs(newZoom - oldZoom) < 0.002) return;
 
       const baseH = getBaseIcicleHeight();
       const vpRect = elViewport.getBoundingClientRect();
-      const anchorY = typeof req.anchorClientY === 'number'
-        ? req.anchorClientY - vpRect.top
+      const anchorY = typeof anchorClient === 'number'
+        ? anchorClient - vpRect.top
         : vpRect.height / 2;
       const prevScrollLeft = elViewport.scrollLeft;
       const contentY = elViewport.scrollTop + anchorY - COL_HEAD_H;
@@ -630,6 +634,10 @@
       elViewport.scrollTop = nextScrollTop;
       elViewport.scrollLeft = prevScrollLeft;
     });
+  }
+
+  function applyZoomMultiplier(factor, anchorClientY) {
+    scheduleVerticalZoom(targetVZoom * factor, anchorClientY);
   }
 
   // ---- Horizontal Icicle Renderer ----
@@ -999,10 +1007,10 @@
     } else if (state.viewMode === 'icicle' && (e.metaKey || e.ctrlKey)) {
       if (e.key === '=' || e.key === '+') {
         e.preventDefault();
-        scheduleVerticalZoom(state.vZoom * 1.35);
+        applyZoomMultiplier(1.35);
       } else if (e.key === '-') {
         e.preventDefault();
-        scheduleVerticalZoom(state.vZoom / 1.35);
+        applyZoomMultiplier(1 / 1.35);
       } else if (e.key === '0') {
         e.preventDefault();
         scheduleVerticalZoom(1);
@@ -1016,38 +1024,20 @@
     });
   }
 
-  // Trackpad two-finger pinch-to-zoom (vertical-only expansion)
-  let gestureActive = false;
-  let gestureStartZoom = 1;
-  let gestureAnchorY = null;
+  // Native macOS WKWebView trackpad magnifyWithEvent: bridge (continuous vertical-only zoom)
+  window.__xnkMagnify = (delta, clientY) => {
+    if (state.viewMode !== 'icicle' || !state.treeData) return;
+    if (typeof delta !== 'number' || !Number.isFinite(delta) || delta === 0) return;
+    const factor = Math.exp(delta * 2.0);
+    applyZoomMultiplier(factor, clientY);
+  };
 
-  elViewport.addEventListener('gesturestart', (e) => {
-    if (state.viewMode !== 'icicle') return;
-    e.preventDefault();
-    gestureActive = true;
-    gestureStartZoom = state.vZoom;
-    gestureAnchorY = typeof e.clientY === 'number' ? e.clientY : null;
-  }, { passive: false });
-
-  elViewport.addEventListener('gesturechange', (e) => {
-    if (state.viewMode !== 'icicle' || !gestureActive) return;
-    e.preventDefault();
-    const anchorY = typeof e.clientY === 'number' ? e.clientY : gestureAnchorY;
-    scheduleVerticalZoom(gestureStartZoom * (e.scale || 1), anchorY);
-  }, { passive: false });
-
-  elViewport.addEventListener('gestureend', (e) => {
-    if (!gestureActive) return;
-    e.preventDefault();
-    gestureActive = false;
-  }, { passive: false });
-
+  // Cross-browser fallback for Ctrl+wheel / trackpad pinch when opened outside native WKWebView
   elViewport.addEventListener('wheel', (e) => {
     if (!e.ctrlKey || state.viewMode !== 'icicle') return;
     e.preventDefault();
-    if (gestureActive) return;
-    const factor = Math.exp(-e.deltaY * 0.01);
-    scheduleVerticalZoom(state.vZoom * factor, e.clientY);
+    const factor = Math.exp(-e.deltaY * 0.015);
+    applyZoomMultiplier(factor, e.clientY);
   }, { passive: false });
 
   elModeScroll.addEventListener('click', () => {

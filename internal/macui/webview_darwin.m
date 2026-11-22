@@ -1,9 +1,27 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
+@interface XnkWebView : WKWebView
+@end
+
+@implementation XnkWebView
+
+- (void)magnifyWithEvent:(NSEvent *)event {
+    CGFloat delta = [event magnification];
+    if (delta == 0.0) {
+        return;
+    }
+    NSPoint pt = [self convertPoint:[event locationInWindow] fromView:nil];
+    CGFloat clientY = [self isFlipped] ? pt.y : (self.bounds.size.height - pt.y);
+    NSString *js = [NSString stringWithFormat:@"window.__xnkMagnify && window.__xnkMagnify(%.6f, %.2f);", delta, clientY];
+    [self evaluateJavaScript:js completionHandler:nil];
+}
+
+@end
+
 @interface XnkAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property (strong, nonatomic) NSWindow *window;
-@property (strong, nonatomic) WKWebView *webView;
+@property (strong, nonatomic) XnkWebView *webView;
 @property (copy, nonatomic) NSString *initialURL;
 @property (copy, nonatomic) NSString *windowTitle;
 @property (assign, nonatomic) NSInteger width;
@@ -55,7 +73,7 @@
     [self.window center];
 
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    self.webView = [[WKWebView alloc] initWithFrame:[[self.window contentView] bounds] configuration:config];
+    self.webView = [[XnkWebView alloc] initWithFrame:[[self.window contentView] bounds] configuration:config];
     [self.webView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     [[self.window contentView] addSubview:self.webView];
 
