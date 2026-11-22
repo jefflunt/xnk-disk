@@ -18,7 +18,7 @@ struct ContentView: View {
             breadcrumbBar
             Divider().background(Color.white.opacity(0.06))
 
-            if model.isScanning, let prog = model.scanProgress {
+            if model.isScanningSelected, let prog = model.activeScanProgressForSelected {
                 scanProgressStrip(prog)
                 Divider().background(Color.white.opacity(0.11))
             }
@@ -210,7 +210,7 @@ struct ContentView: View {
                 .layoutPriority(1)
             }
 
-            if model.isScanning {
+            if model.isScanningSelected {
                 Button("Cancel") {
                     model.cancelScan()
                 }
@@ -225,7 +225,7 @@ struct ContentView: View {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 11.5, weight: .semibold))
-                    Text(model.isScanning ? "Scanning…" : (model.selectedVolume.map { model.isScanned($0.id) } == true ? "Rescan" : "Scan Disk"))
+                    Text(model.isScanningSelected ? "Scanning…" : (model.selectedVolume.map { model.isScanned($0.id) } == true ? "Rescan" : "Scan Disk"))
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .foregroundColor(.white)
@@ -235,8 +235,8 @@ struct ContentView: View {
                 .cornerRadius(7)
             }
             .buttonStyle(.plain)
-            .disabled(model.isScanning)
-            .opacity(model.isScanning ? 0.6 : 1.0)
+            .disabled(model.isScanningSelected)
+            .opacity(model.isScanningSelected ? 0.6 : 1.0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -429,7 +429,7 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(primaryBlue)
                     .controlSize(.small)
-                    .disabled(model.isScanning)
+                    .disabled(model.store.isScanning(vol.id))
                 }
             }
 
@@ -597,9 +597,9 @@ struct ContentView: View {
                     .font(.system(size: 26))
                     .foregroundColor(emerald)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Purge Rebuildable Contents?")
+                    Text("Purge Rebuildable Contents on \(model.selectedVolume?.name ?? "Disk")?")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Moves the contents of \(targets.count) \(targets.count == 1 ? "folder" : "folders") (\(Formatters.bytes(totalSize))) to Trash while keeping each folder in place. You can restore everything with Undo (⌘Z).")
+                    Text("Moves the contents of \(targets.count) \(targets.count == 1 ? "folder" : "folders") (\(Formatters.bytes(totalSize))) in this view to Trash while keeping each folder in place. You can restore everything with Undo (⌘Z).")
                         .font(.system(size: 12))
                         .foregroundColor(mutedFG)
                         .fixedSize(horizontal: false, vertical: true)

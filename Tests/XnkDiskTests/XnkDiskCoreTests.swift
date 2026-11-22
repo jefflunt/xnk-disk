@@ -304,4 +304,47 @@ final class XnkDiskCoreTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: fileA, encoding: .utf8), "hello")
         XCTAssertEqual(try String(contentsOf: fileB, encoding: .utf8), "world")
     }
+
+    // MARK: - Multi-Window Session Persistence
+    func testWindowSessionStoreRoundTrip() {
+        let suite = "com.jefflunt.xnk-disk.windows.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            XCTFail("Could not create isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertTrue(WindowSessionStore.load(from: defaults).isEmpty)
+
+        let w1 = SavedWindowState(
+            frame: WindowRect(x: 100, y: 120, width: 1200, height: 800),
+            selectedVolumeID: "/",
+            viewModeRaw: "icicle",
+            currentPath: "/Users/alice/Library",
+            layoutModeRaw: "Scrollable",
+            maxDepth: 20,
+            groupSmall: true,
+            hideFreeSpace: true,
+            highlightRebuildsOnly: true,
+            vZoom: 2.5
+        )
+        let w2 = SavedWindowState(
+            frame: WindowRect(x: 340, y: 180, width: 1000, height: 700),
+            selectedVolumeID: "/Volumes/ExternalSSD",
+            viewModeRaw: "overview",
+            currentPath: "",
+            layoutModeRaw: "Fit",
+            maxDepth: 10,
+            groupSmall: false,
+            hideFreeSpace: false,
+            highlightRebuildsOnly: false,
+            vZoom: 1.0
+        )
+
+        WindowSessionStore.save([w1, w2], to: defaults)
+        let loaded = WindowSessionStore.load(from: defaults)
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertEqual(loaded[0], w1)
+        XCTAssertEqual(loaded[1], w2)
+    }
 }

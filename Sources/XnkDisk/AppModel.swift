@@ -3,7 +3,7 @@ import AppKit
 import Combine
 import XnkDiskCore
 
-enum ViewMode {
+enum ViewMode: String {
     case overview
     case icicle
 }
@@ -23,43 +23,53 @@ struct ToastMessage: Equatable {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var volumes: [VolumeInfo] = []
-    @Published var selectedVolumeID: String = ""
-    @Published var viewMode: ViewMode = .overview
-    @Published var layoutMode: LayoutMode = .scroll { didSet { persistPreferences() } }
-    @Published var maxDepth: Int = 10 { didSet { persistPreferences() } }
-    @Published var groupSmall: Bool = false { didSet { persistPreferences() } }
-    @Published var hideFreeSpace: Bool = false { didSet { persistPreferences() } }
-    @Published var highlightRebuildsOnly: Bool = false { didSet { persistPreferences() } }
-    @Published var vZoom: CGFloat = 1.0
+    let windowID: UUID
+    let store: DiskStore
+    var onStateChanged: (() -> Void)?
 
-    @Published var isScanning: Bool = false
-    @Published var scanProgress: ScanProgress?
+    @Published var selectedVolumeID: String = "" { didSet { notifyStateChanged() } }
+    @Published var viewMode: ViewMode = .overview { didSet { notifyStateChanged() } }
+    @Published var layoutMode: LayoutMode = .scroll { didSet { notifyStateChanged() } }
+    @Published var maxDepth: Int = 10 { didSet { notifyStateChanged() } }
+    @Published var groupSmall: Bool = false { didSet { notifyStateChanged() } }
+    @Published var hideFreeSpace: Bool = false { didSet { notifyStateChanged() } }
+    @Published var highlightRebuildsOnly: Bool = false { didSet { notifyStateChanged() } }
+    @Published var vZoom: CGFloat = 1.0 { didSet { notifyStateChanged() } }
 
     @Published var focusedRoot: ViewNode?
     @Published var treeGeneration: UInt64 = 0
     @Published var breadcrumbs: [Crumb] = []
     @Published var deepestLevel: Int = 0
     @Published var isAtVolumeRoot: Bool = true
-    @Published var currentPath: String = ""
+    @Published var currentPath: String = "" { didSet { notifyStateChanged() } }
     @Published var hasVisibleRebuilds: Bool = false
     @Published var rebuildableTargets: [RebuildableTarget] = []
     @Published var showPurgeSheet: Bool = false
-    @Published var isPurging: Bool = false
-
-    @Published var undoStack: [UndoEntry] = []
     @Published var toast: ToastMessage?
 
-    private(set) var scanResults: [String: ScanResult] = [:]
-    private var customRules: CustomRulesConfig = CustomRulesConfig()
-    private var activeScanner: DiskScanner?
-    private var progressTimer: Timer?
-    private var toastTask: Task<Void, Never>?
-    private let treeQueue = DispatchQueue(label: "com.jefflunt.xnk-disk.tree", qos: .userInitiated)
+    private var isBootstrapping: Bool = true
+    private var pendingRestoreIcicle: Bool = false
+    private var pendingRestoreZoom: CGFloat = 1.0
     private var treeRequestID: UInt64 = 0
+    private var toastTask: Task<Void, Never>?
+    private var cancellables: Set<AnyCancellable> = []
+
+    var volumes: [VolumeInfo] { store.volumes }
+    var undoStack: [UndoEntry] { store.undoStack }
+    var isPurging: Bool { store.isBusyMutating }
 
     var selectedVolume: VolumeInfo? {
-        volumes.first(where: { $0.id == selectedVolumeID }) ?? volumes.first
+        store.volumes.first(where: { $0.id == selectedVolumeID }) ?? store.volumes.first
+    }
+
+    var isScanningSelected: Bool {
+        guard let vid = selectedVolume?.id else { return false }
+        return store.isScanning(vid)
+    }
+
+    var activeScanProgressForSelected: ScanProgress? {
+        guard let vid = selectedVolume?.id else { return nil }
+        return store.activeScanProgress[vid]
     }
 
     var canTrashFocused: Bool {
@@ -67,68 +77,114 @@ final class AppModel: ObservableObject {
         return TrashManager.isTrashable(path: root.path, volumeID: vol.id)
     }
 
-    private var isBootstrapping: Bool = true
+    var windowTitle: String {
+        if viewMode == .icicle, let vol = selectedVolume {
+            return "XNK Disk — \(vol.name)"
+        }
+        return "XNK Disk"
+    }
 
-    init() {
-        let prefs = PreferencesStore.load()
-        layoutMode = LayoutMode(rawValue: prefs.layoutModeRaw) ?? .scroll
-        maxDepth = prefs.maxDepth
-        groupSmall = prefs.groupSmall
-        hideFreeSpace = prefs.hideFreeSpace
-        highlightRebuildsOnly = prefs.highlightRebuildsOnly
-        isBootstrapping = false
+    init(savedState: SavedWindowState, store: DiskStore) {
+        self.windowID = savedState.id
+        self.store = store
 
-        customRules = CustomRulesStore.load()
-        refreshVolumes()
+        self.selectedVolumeID = savedState.selectedVolumeID
+        self.layoutMode = LayoutMode(rawValue: savedState.layoutModeRaw) ?? .scroll
+        self.maxDepth = savedState.maxDepth
+        self.groupSmall = savedState.groupSmall
+        self.hideFreeSpace = savedState.hideFreeSpace
+        self.highlightRebuildsOnly = savedState.highlightRebuildsOnly
+        self.vZoom = CGFloat(max(1.0, min(25.0, savedState.vZoom)))
+        self.currentPath = savedState.currentPath
 
-        // Load LZFSE scan cache off the main thread so the window opens instantaneously.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let cached = ScanCacheStore.loadAll()
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                for (k, v) in cached where self.scanResults[k] == nil {
-                    self.scanResults[k] = v
-                }
-                self.objectWillChange.send()
+        if savedState.viewModeRaw == ViewMode.icicle.rawValue && !savedState.selectedVolumeID.isEmpty {
+            self.pendingRestoreIcicle = true
+            self.pendingRestoreZoom = self.vZoom
+        }
+        self.isBootstrapping = false
+
+        // Forward shared store changes so SwiftUI re-renders this window.
+        store.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
             }
+            .store(in: &cancellables)
+
+        store.$volumes
+            .sink { [weak self] vols in
+                guard let self else { return }
+                if self.selectedVolumeID.isEmpty || !vols.contains(where: { $0.id == self.selectedVolumeID }) {
+                    if let first = vols.first {
+                        self.selectedVolumeID = first.id
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        store.dataChanged
+            .sink { [weak self] changedVolumeID in
+                guard let self else { return }
+                if self.pendingRestoreIcicle {
+                    if self.store.isScanned(self.selectedVolumeID) {
+                        let restoreZoom = self.pendingRestoreZoom
+                        self.pendingRestoreIcicle = false
+                        self.openTree(volumeID: self.selectedVolumeID, path: self.currentPath, resetZoom: false)
+                        self.vZoom = restoreZoom
+                        return
+                    } else if self.store.cacheLoaded {
+                        self.pendingRestoreIcicle = false
+                    }
+                }
+                if self.viewMode == .icicle {
+                    if changedVolumeID == nil || changedVolumeID == self.selectedVolumeID {
+                        self.reloadCurrentTree(resetZoom: false)
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        // If cache is already loaded (e.g. File -> New Window or restored after boot), restore immediately.
+        if pendingRestoreIcicle && store.isScanned(selectedVolumeID) {
+            let restoreZoom = pendingRestoreZoom
+            pendingRestoreIcicle = false
+            openTree(volumeID: selectedVolumeID, path: currentPath, resetZoom: false)
+            vZoom = restoreZoom
         }
     }
 
-    private func persistPreferences() {
-        guard !isBootstrapping else { return }
-        PreferencesStore.save(ViewPreferences(
+    func snapshotState(frame: WindowRect?) -> SavedWindowState {
+        SavedWindowState(
+            id: windowID,
+            frame: frame,
+            selectedVolumeID: selectedVolumeID,
+            viewModeRaw: (viewMode == .icicle || pendingRestoreIcicle) ? ViewMode.icicle.rawValue : ViewMode.overview.rawValue,
+            currentPath: currentPath,
             layoutModeRaw: layoutMode.rawValue,
             maxDepth: maxDepth,
             groupSmall: groupSmall,
             hideFreeSpace: hideFreeSpace,
-            highlightRebuildsOnly: highlightRebuildsOnly
-        ))
+            highlightRebuildsOnly: highlightRebuildsOnly,
+            vZoom: Double(vZoom)
+        )
     }
 
-    func refreshVolumes() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let vols = VolumeDiscovery.list()
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.volumes = vols
-                if self.selectedVolumeID.isEmpty || !vols.contains(where: { $0.id == self.selectedVolumeID }) {
-                    self.selectedVolumeID = vols.first?.id ?? ""
-                }
-            }
-        }
+    private func notifyStateChanged() {
+        guard !isBootstrapping else { return }
+        onStateChanged?()
     }
 
     func isScanned(_ volumeID: String) -> Bool {
-        scanResults[volumeID] != nil
+        store.isScanned(volumeID)
     }
 
     func scannedAt(_ volumeID: String) -> Date? {
-        scanResults[volumeID]?.scannedAt
+        store.scannedAt(volumeID)
     }
 
     func selectVolume(_ id: String) {
+        pendingRestoreIcicle = false
         selectedVolumeID = id
-        if scanResults[id] != nil {
+        if store.isScanned(id) {
             openTree(volumeID: id, path: "", resetZoom: true)
         } else {
             viewMode = .overview
@@ -136,25 +192,25 @@ final class AppModel: ObservableObject {
     }
 
     func goHome() {
+        pendingRestoreIcicle = false
         viewMode = .overview
         vZoom = 1.0
     }
 
     func openTree(volumeID: String, path: String, resetZoom: Bool = true) {
-        guard let res = scanResults[volumeID] else {
+        guard let res = store.scanResults[volumeID] else {
             viewMode = .overview
             return
         }
         selectedVolumeID = volumeID
-        let vol = volumes.first(where: { $0.id == volumeID })
+        let vol = store.volumes.first(where: { $0.id == volumeID })
         let reqMaxDepth = maxDepth
         let reqGroupSmall = groupSmall
-        let reqRules = customRules
+        let reqRules = store.customRules
         treeRequestID &+= 1
         let reqID = treeRequestID
 
-        // Project the view tree & collect rebuildable folders off the main thread.
-        treeQueue.async { [weak self] in
+        store.treeQueue.async { [weak self] in
             let (focusNode, crumbs) = res.root.findPath(path)
             let isRoot = (focusNode === res.root)
             let scaleBytes: UInt64
@@ -207,55 +263,18 @@ final class AppModel: ObservableObject {
 
     // MARK: - Parallel Scanning
     func startScan(volumeID: String) {
-        guard !isScanning, let vol = volumes.first(where: { $0.id == volumeID }) else { return }
         selectedVolumeID = volumeID
-        isScanning = true
-
-        let scanner = DiskScanner(options: ScanOptions(
-            volumeID: vol.id,
-            volumeName: vol.name,
-            rootPath: vol.mountPoint,
-            allowedDevs: vol.allowedDevs
-        ))
-        activeScanner = scanner
-        scanProgress = scanner.progress(active: true)
-
-        progressTimer?.invalidate()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, let sc = self.activeScanner else { return }
-                self.scanProgress = sc.progress(active: true)
-            }
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = scanner.run()
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.progressTimer?.invalidate()
-                self.progressTimer = nil
-                self.activeScanner = nil
-                self.isScanning = false
-                self.scanProgress = nil
-
-                self.refreshVolumes()
-                if let result {
-                    self.scanResults[vol.id] = result
-                    DispatchQueue.global(qos: .utility).async {
-                        try? ScanCacheStore.save(result)
-                    }
-                    self.openTree(volumeID: vol.id, path: "", resetZoom: true)
-                }
+        store.startScan(volumeID: volumeID) { [weak self] completed in
+            guard let self, completed else { return }
+            if self.selectedVolumeID == volumeID {
+                self.openTree(volumeID: volumeID, path: "", resetZoom: true)
             }
         }
     }
 
     func cancelScan() {
-        activeScanner?.cancel()
-        progressTimer?.invalidate()
-        progressTimer = nil
-        isScanning = false
-        scanProgress = nil
+        guard let vid = selectedVolume?.id else { return }
+        store.cancelScan(volumeID: vid)
     }
 
     // MARK: - Finder, Trash & Undo
@@ -266,18 +285,18 @@ final class AppModel: ObservableObject {
     }
 
     func moveToTrash(path: String) {
-        guard !isPurging, let vol = selectedVolume, let res = scanResults[vol.id] else { return }
+        guard !store.isBusyMutating, let vol = selectedVolume, let res = store.scanResults[vol.id] else { return }
         let volID = vol.id
-        isPurging = true
+        store.isBusyMutating = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let trashedPath = try TrashManager.moveToTrash(path: path, volumeID: volID)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    self.isPurging = false
+                    self.store.isBusyMutating = false
                     if let removed = res.root.removePath(path) {
-                        self.undoStack.append(UndoEntry(
+                        self.store.undoStack.append(UndoEntry(
                             volumeID: volID,
                             name: removed.removed.name,
                             originalPath: cleanPath(path),
@@ -285,7 +304,9 @@ final class AppModel: ObservableObject {
                             parentPath: removed.parentPath,
                             removedNode: removed.removed
                         ))
-                        let nextPath = (cleanPath(self.currentPath) == cleanPath(path)) ? removed.parentPath : self.currentPath
+                        if cleanPath(self.currentPath) == cleanPath(path) {
+                            self.currentPath = removed.parentPath
+                        }
                         let updatedRes = ScanResult(
                             volumeID: res.volumeID,
                             volumeName: res.volumeName,
@@ -296,17 +317,16 @@ final class AppModel: ObservableObject {
                             scannedAt: res.scannedAt,
                             durationMs: res.durationMs
                         )
-                        self.scanResults[volID] = updatedRes
-                        DispatchQueue.global(qos: .utility).async {
+                        self.store.treeQueue.async {
                             try? ScanCacheStore.save(updatedRes)
                         }
                         self.showToast("Moved \"\(removed.removed.name)\" to Trash", showUndo: true)
-                        self.openTree(volumeID: volID, path: nextPath, resetZoom: false)
+                        self.store.updateScanResult(updatedRes)
                     }
                 }
             } catch {
                 Task { @MainActor [weak self] in
-                    self?.isPurging = false
+                    self?.store.isBusyMutating = false
                     self?.showToast(error.localizedDescription, isError: true)
                 }
             }
@@ -314,22 +334,22 @@ final class AppModel: ObservableObject {
     }
 
     func undoLastTrash() {
-        guard !isPurging, let entry = undoStack.popLast() else { return }
+        guard !store.isBusyMutating, let entry = store.undoStack.popLast() else { return }
 
         if !entry.purgedFolders.isEmpty {
-            isPurging = true
+            store.isBusyMutating = true
             let items = entry.items
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let outcome = TrashManager.restoreItems(items)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    self.isPurging = false
+                    self.store.isBusyMutating = false
                     if outcome.restored == 0 && outcome.failed > 0 {
-                        self.undoStack.append(entry)
+                        self.store.undoStack.append(entry)
                         self.showToast("Could not restore purged items from Trash", isError: true)
                         return
                     }
-                    if let res = self.scanResults[entry.volumeID] {
+                    if let res = self.store.scanResults[entry.volumeID] {
                         for snap in entry.purgedFolders {
                             res.root.restoreDirectoryContents(snap)
                         }
@@ -343,19 +363,16 @@ final class AppModel: ObservableObject {
                             scannedAt: res.scannedAt,
                             durationMs: res.durationMs
                         )
-                        self.scanResults[entry.volumeID] = updatedRes
-                        self.treeQueue.async {
+                        self.store.treeQueue.async {
                             res.root.sortRecursive()
                             try? ScanCacheStore.save(updatedRes)
                         }
+                        self.store.updateScanResult(updatedRes)
                     }
                     let msg = outcome.failed > 0
                         ? "Restored \"\(entry.name)\" (\(outcome.failed) items could not be restored)"
                         : "Restored \"\(entry.name)\" from Trash"
                     self.showToast(msg)
-                    if self.viewMode == .icicle && self.selectedVolumeID == entry.volumeID {
-                        self.reloadCurrentTree(resetZoom: false)
-                    }
                 }
             }
             return
@@ -365,14 +382,14 @@ final class AppModel: ObservableObject {
               let parentPath = entry.singleRemovedParentPath,
               let removedNode = entry.singleRemovedNode else { return }
 
-        isPurging = true
+        store.isBusyMutating = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 try TrashManager.restore(trashedPath: item.trashedPath, to: item.originalPath)
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    self.isPurging = false
-                    if let res = self.scanResults[entry.volumeID] {
+                    self.store.isBusyMutating = false
+                    if let res = self.store.scanResults[entry.volumeID] {
                         res.root.restoreNode(parentPath: parentPath, restored: removedNode)
                         let updatedRes = ScanResult(
                             volumeID: res.volumeID,
@@ -384,38 +401,36 @@ final class AppModel: ObservableObject {
                             scannedAt: res.scannedAt,
                             durationMs: res.durationMs
                         )
-                        self.scanResults[entry.volumeID] = updatedRes
-                        DispatchQueue.global(qos: .utility).async {
+                        self.store.treeQueue.async {
                             try? ScanCacheStore.save(updatedRes)
                         }
+                        self.store.updateScanResult(updatedRes)
                     }
                     self.showToast("Restored \"\(entry.name)\" from Trash")
-                    if self.viewMode == .icicle && self.selectedVolumeID == entry.volumeID {
-                        self.reloadCurrentTree(resetZoom: false)
-                    }
                 }
             } catch {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    self.isPurging = false
-                    self.undoStack.append(entry)
+                    self.store.isBusyMutating = false
+                    self.store.undoStack.append(entry)
                     self.showToast("Could not restore: \(error.localizedDescription)", isError: true)
                 }
             }
         }
     }
 
+    /// Purges ONLY the rebuildable folders within THIS window's selected disk / focused view.
     func purgeRebuildable() {
-        guard !isPurging,
+        guard !store.isBusyMutating,
               let vol = selectedVolume,
-              let res = scanResults[vol.id],
+              let res = store.scanResults[vol.id],
               !rebuildableTargets.isEmpty else { return }
 
         let targets = rebuildableTargets
         let targetPaths = targets.map { $0.node.path }
         let volID = vol.id
         showPurgeSheet = false
-        isPurging = true
+        store.isBusyMutating = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var allMoved: [TrashedItem] = []
@@ -437,7 +452,7 @@ final class AppModel: ObservableObject {
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.isPurging = false
+                self.store.isBusyMutating = false
 
                 guard !allMoved.isEmpty else {
                     self.showToast("No rebuildable items could be moved to Trash", isError: true)
@@ -456,7 +471,7 @@ final class AppModel: ObservableObject {
                     ? "Purge (\(URL(fileURLWithPath: snapshots[0].folderPath).lastPathComponent))"
                     : "Purge (\(folderCount) folders)"
 
-                self.undoStack.append(UndoEntry(
+                self.store.undoStack.append(UndoEntry(
                     volumeID: volID,
                     name: label,
                     items: allMoved,
@@ -473,8 +488,7 @@ final class AppModel: ObservableObject {
                     scannedAt: res.scannedAt,
                     durationMs: res.durationMs
                 )
-                self.scanResults[volID] = updatedRes
-                self.treeQueue.async {
+                self.store.treeQueue.async {
                     res.root.sortRecursive()
                     try? ScanCacheStore.save(updatedRes)
                 }
@@ -484,29 +498,20 @@ final class AppModel: ObservableObject {
                     ? "Moved \(Formatters.bytes(totalFreed)) from \(folderCount) folders to Trash (\(totalFailed) skipped)"
                     : "Moved \(Formatters.bytes(totalFreed)) from \(folderCount) rebuildable folders to Trash"
                 self.showToast(summary, showUndo: true)
-                self.reloadCurrentTree(resetZoom: false)
+                self.store.updateScanResult(updatedRes)
             }
         }
     }
 
     // MARK: - Custom Rules (Right-Click Mark / Unmark)
     func markRebuilds(path: String, label: String) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        customRules.markPathRebuilds(path, label: label, home: home)
-        try? CustomRulesStore.save(customRules)
+        store.markRebuilds(path: path, label: label)
         showToast("Marked \"\(label)\" as \"Rebuildable\"")
-        reloadCurrentTree(resetZoom: false)
     }
 
     func unmarkRebuilds(path: String, label: String) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let clean = cleanPath(path)
-        let dummy = DiskNode(name: (clean as NSString).lastPathComponent, path: clean, isDir: true)
-        let hasBuiltIn = DevCacheClassifier.classifyBuiltIn(node: dummy, parent: nil) != nil
-        customRules.unmarkPath(clean, home: home, hasBuiltIn: hasBuiltIn)
-        try? CustomRulesStore.save(customRules)
+        store.unmarkRebuilds(path: path)
         showToast("Removed \"Rebuildable\" tag from \"\(label)\"")
-        reloadCurrentTree(resetZoom: false)
     }
 
     // MARK: - Zoom
