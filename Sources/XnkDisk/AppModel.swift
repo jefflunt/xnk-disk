@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
     @Published var scanProgress: ScanProgress?
 
     @Published var focusedRoot: ViewNode?
+    @Published var treeGeneration: UInt64 = 0
     @Published var breadcrumbs: [Crumb] = []
     @Published var deepestLevel: Int = 0
     @Published var isAtVolumeRoot: Bool = true
@@ -54,6 +55,8 @@ final class AppModel: ObservableObject {
     private var activeScanner: DiskScanner?
     private var progressTimer: Timer?
     private var toastTask: Task<Void, Never>?
+    private let treeQueue = DispatchQueue(label: "com.jefflunt.xnk-disk.tree", qos: .userInitiated)
+    private var treeRequestID: UInt64 = 0
 
     var selectedVolume: VolumeInfo? {
         volumes.first(where: { $0.id == selectedVolumeID }) ?? volumes.first
@@ -76,8 +79,19 @@ final class AppModel: ObservableObject {
         isBootstrapping = false
 
         customRules = CustomRulesStore.load()
-        scanResults = ScanCacheStore.loadAll()
         refreshVolumes()
+
+        // Load LZFSE scan cache off the main thread so the window opens instantaneously.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let cached = ScanCacheStore.loadAll()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for (k, v) in cached where self.scanResults[k] == nil {
+                    self.scanResults[k] = v
+                }
+                self.objectWillChange.send()
+            }
+        }
     }
 
     private func persistPreferences() {
@@ -92,9 +106,15 @@ final class AppModel: ObservableObject {
     }
 
     func refreshVolumes() {
-        volumes = VolumeDiscovery.list()
-        if selectedVolumeID.isEmpty || !volumes.contains(where: { $0.id == selectedVolumeID }) {
-            selectedVolumeID = volumes.first?.id ?? ""
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let vols = VolumeDiscovery.list()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.volumes = vols
+                if self.selectedVolumeID.isEmpty || !vols.contains(where: { $0.id == self.selectedVolumeID }) {
+                    self.selectedVolumeID = vols.first?.id ?? ""
+                }
+            }
         }
     }
 
@@ -126,36 +146,50 @@ final class AppModel: ObservableObject {
             return
         }
         selectedVolumeID = volumeID
-        let (focusNode, crumbs) = res.root.findPath(path)
-        let isRoot = (focusNode === res.root)
         let vol = volumes.first(where: { $0.id == volumeID })
+        let reqMaxDepth = maxDepth
+        let reqGroupSmall = groupSmall
+        let reqRules = customRules
+        treeRequestID &+= 1
+        let reqID = treeRequestID
 
-        let scaleBytes: UInt64
-        if isRoot, let v = vol, v.totalBytes > 0 {
-            scaleBytes = v.totalBytes
-        } else {
-            scaleBytes = focusNode.size
+        // Project the view tree & collect rebuildable folders off the main thread.
+        treeQueue.async { [weak self] in
+            let (focusNode, crumbs) = res.root.findPath(path)
+            let isRoot = (focusNode === res.root)
+            let scaleBytes: UInt64
+            if isRoot, let v = vol, v.totalBytes > 0 {
+                scaleBytes = v.totalBytes
+            } else {
+                scaleBytes = focusNode.size
+            }
+
+            let (projected, deepest) = projectView(
+                root: focusNode,
+                maxDepth: reqMaxDepth,
+                groupSmall: reqGroupSmall,
+                scaleBytes: scaleBytes,
+                rules: reqRules
+            )
+            let targets = focusNode.collectRebuildableFolders(customRules: reqRules)
+            let hasRebuilds = !targets.isEmpty || Self.containsRebuildsHint(projected)
+
+            Task { @MainActor [weak self] in
+                guard let self, self.treeRequestID == reqID else { return }
+                self.focusedRoot = projected
+                self.breadcrumbs = crumbs
+                self.deepestLevel = deepest
+                self.isAtVolumeRoot = isRoot
+                self.currentPath = projected.path
+                self.rebuildableTargets = targets
+                self.hasVisibleRebuilds = hasRebuilds
+                if resetZoom {
+                    self.vZoom = 1.0
+                }
+                self.treeGeneration &+= 1
+                self.viewMode = .icicle
+            }
         }
-
-        let (projected, deepest) = projectView(
-            root: focusNode,
-            maxDepth: maxDepth,
-            groupSmall: groupSmall,
-            scaleBytes: scaleBytes,
-            rules: customRules
-        )
-
-        focusedRoot = projected
-        breadcrumbs = crumbs
-        deepestLevel = deepest
-        isAtVolumeRoot = isRoot
-        currentPath = projected.path
-        rebuildableTargets = focusNode.collectRebuildableFolders(customRules: customRules)
-        hasVisibleRebuilds = !rebuildableTargets.isEmpty || containsRebuildsHint(projected)
-        if resetZoom {
-            vZoom = 1.0
-        }
-        viewMode = .icicle
     }
 
     func reloadCurrentTree(resetZoom: Bool = false) {
@@ -163,7 +197,7 @@ final class AppModel: ObservableObject {
         openTree(volumeID: selectedVolumeID, path: currentPath, resetZoom: resetZoom)
     }
 
-    private func containsRebuildsHint(_ node: ViewNode) -> Bool {
+    private nonisolated static func containsRebuildsHint(_ node: ViewNode) -> Bool {
         if node.hint?.safety == .rebuilds { return true }
         for c in node.children {
             if containsRebuildsHint(c) { return true }
@@ -232,38 +266,50 @@ final class AppModel: ObservableObject {
     }
 
     func moveToTrash(path: String) {
-        guard let vol = selectedVolume, let res = scanResults[vol.id] else { return }
-        do {
-            let trashedPath = try TrashManager.moveToTrash(path: path, volumeID: vol.id)
-            if let removed = res.root.removePath(path) {
-                undoStack.append(UndoEntry(
-                    volumeID: vol.id,
-                    name: removed.removed.name,
-                    originalPath: cleanPath(path),
-                    trashedPath: trashedPath,
-                    parentPath: removed.parentPath,
-                    removedNode: removed.removed
-                ))
-                let nextPath = (cleanPath(currentPath) == cleanPath(path)) ? removed.parentPath : currentPath
-                let updatedRes = ScanResult(
-                    volumeID: res.volumeID,
-                    volumeName: res.volumeName,
-                    root: res.root,
-                    totalFiles: res.root.files,
-                    totalDirs: res.root.dirs,
-                    skippedPerm: res.skippedPerm,
-                    scannedAt: res.scannedAt,
-                    durationMs: res.durationMs
-                )
-                scanResults[vol.id] = updatedRes
-                DispatchQueue.global(qos: .utility).async {
-                    try? ScanCacheStore.save(updatedRes)
+        guard !isPurging, let vol = selectedVolume, let res = scanResults[vol.id] else { return }
+        let volID = vol.id
+        isPurging = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let trashedPath = try TrashManager.moveToTrash(path: path, volumeID: volID)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.isPurging = false
+                    if let removed = res.root.removePath(path) {
+                        self.undoStack.append(UndoEntry(
+                            volumeID: volID,
+                            name: removed.removed.name,
+                            originalPath: cleanPath(path),
+                            trashedPath: trashedPath,
+                            parentPath: removed.parentPath,
+                            removedNode: removed.removed
+                        ))
+                        let nextPath = (cleanPath(self.currentPath) == cleanPath(path)) ? removed.parentPath : self.currentPath
+                        let updatedRes = ScanResult(
+                            volumeID: res.volumeID,
+                            volumeName: res.volumeName,
+                            root: res.root,
+                            totalFiles: res.root.files,
+                            totalDirs: res.root.dirs,
+                            skippedPerm: res.skippedPerm,
+                            scannedAt: res.scannedAt,
+                            durationMs: res.durationMs
+                        )
+                        self.scanResults[volID] = updatedRes
+                        DispatchQueue.global(qos: .utility).async {
+                            try? ScanCacheStore.save(updatedRes)
+                        }
+                        self.showToast("Moved \"\(removed.removed.name)\" to Trash", showUndo: true)
+                        self.openTree(volumeID: volID, path: nextPath, resetZoom: false)
+                    }
                 }
-                showToast("Moved \"\(removed.removed.name)\" to Trash", showUndo: true)
-                openTree(volumeID: vol.id, path: nextPath, resetZoom: false)
+            } catch {
+                Task { @MainActor [weak self] in
+                    self?.isPurging = false
+                    self?.showToast(error.localizedDescription, isError: true)
+                }
             }
-        } catch {
-            showToast(error.localizedDescription, isError: true)
         }
     }
 
@@ -287,7 +333,6 @@ final class AppModel: ObservableObject {
                         for snap in entry.purgedFolders {
                             res.root.restoreDirectoryContents(snap)
                         }
-                        res.root.sortRecursive()
                         let updatedRes = ScanResult(
                             volumeID: res.volumeID,
                             volumeName: res.volumeName,
@@ -299,7 +344,8 @@ final class AppModel: ObservableObject {
                             durationMs: res.durationMs
                         )
                         self.scanResults[entry.volumeID] = updatedRes
-                        DispatchQueue.global(qos: .utility).async {
+                        self.treeQueue.async {
+                            res.root.sortRecursive()
                             try? ScanCacheStore.save(updatedRes)
                         }
                     }
@@ -319,32 +365,43 @@ final class AppModel: ObservableObject {
               let parentPath = entry.singleRemovedParentPath,
               let removedNode = entry.singleRemovedNode else { return }
 
-        do {
-            try TrashManager.restore(trashedPath: item.trashedPath, to: item.originalPath)
-            if let res = scanResults[entry.volumeID] {
-                res.root.restoreNode(parentPath: parentPath, restored: removedNode)
-                let updatedRes = ScanResult(
-                    volumeID: res.volumeID,
-                    volumeName: res.volumeName,
-                    root: res.root,
-                    totalFiles: res.root.files,
-                    totalDirs: res.root.dirs,
-                    skippedPerm: res.skippedPerm,
-                    scannedAt: res.scannedAt,
-                    durationMs: res.durationMs
-                )
-                scanResults[entry.volumeID] = updatedRes
-                DispatchQueue.global(qos: .utility).async {
-                    try? ScanCacheStore.save(updatedRes)
+        isPurging = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try TrashManager.restore(trashedPath: item.trashedPath, to: item.originalPath)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.isPurging = false
+                    if let res = self.scanResults[entry.volumeID] {
+                        res.root.restoreNode(parentPath: parentPath, restored: removedNode)
+                        let updatedRes = ScanResult(
+                            volumeID: res.volumeID,
+                            volumeName: res.volumeName,
+                            root: res.root,
+                            totalFiles: res.root.files,
+                            totalDirs: res.root.dirs,
+                            skippedPerm: res.skippedPerm,
+                            scannedAt: res.scannedAt,
+                            durationMs: res.durationMs
+                        )
+                        self.scanResults[entry.volumeID] = updatedRes
+                        DispatchQueue.global(qos: .utility).async {
+                            try? ScanCacheStore.save(updatedRes)
+                        }
+                    }
+                    self.showToast("Restored \"\(entry.name)\" from Trash")
+                    if self.viewMode == .icicle && self.selectedVolumeID == entry.volumeID {
+                        self.reloadCurrentTree(resetZoom: false)
+                    }
+                }
+            } catch {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.isPurging = false
+                    self.undoStack.append(entry)
+                    self.showToast("Could not restore: \(error.localizedDescription)", isError: true)
                 }
             }
-            showToast("Restored \"\(entry.name)\" from Trash")
-            if viewMode == .icicle && selectedVolumeID == entry.volumeID {
-                reloadCurrentTree(resetZoom: false)
-            }
-        } catch {
-            undoStack.append(entry)
-            showToast("Could not restore: \(error.localizedDescription)", isError: true)
         }
     }
 
@@ -393,7 +450,6 @@ final class AppModel: ObservableObject {
                         snapshots.append(snap)
                     }
                 }
-                res.root.sortRecursive()
 
                 let folderCount = snapshots.count
                 let label = folderCount == 1
@@ -418,7 +474,8 @@ final class AppModel: ObservableObject {
                     durationMs: res.durationMs
                 )
                 self.scanResults[volID] = updatedRes
-                DispatchQueue.global(qos: .utility).async {
+                self.treeQueue.async {
+                    res.root.sortRecursive()
                     try? ScanCacheStore.save(updatedRes)
                 }
 

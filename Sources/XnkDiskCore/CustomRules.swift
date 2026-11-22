@@ -1,6 +1,6 @@
 import Foundation
 
-public struct CustomRule: Codable, Hashable {
+public struct CustomRule: Codable, Hashable, Sendable {
     public var path: String?
     public var name: String?
     public var sibling: String?
@@ -39,7 +39,7 @@ public struct CustomRule: Codable, Hashable {
     }
 }
 
-public struct CustomRulesConfig: Codable, Hashable {
+public struct CustomRulesConfig: Codable, Hashable, Sendable {
     public var add: [CustomRule]
     public var ignore: [String]
 

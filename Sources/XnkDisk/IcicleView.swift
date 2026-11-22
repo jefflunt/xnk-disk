@@ -82,6 +82,7 @@ struct IcicleRepresentable: NSViewRepresentable {
             let vpSize = scroll.contentView.bounds.size
             doc.configure(
                 root: model.focusedRoot,
+                treeGeneration: model.treeGeneration,
                 volume: model.selectedVolume,
                 isRoot: model.isAtVolumeRoot,
                 baseDepth: max(0, model.breadcrumbs.count - 1),
@@ -193,6 +194,20 @@ final class IcicleDocumentView: NSView {
     private var volumeID: String = ""
     private var highlightRebuildsOnly: Bool = false
 
+    private struct LayoutKey: Equatable {
+        let treeGeneration: UInt64
+        let rootPath: String
+        let isRoot: Bool
+        let baseDepth: Int
+        let maxDepth: Int
+        let layoutMode: LayoutMode
+        let hideFreeSpace: Bool
+        let vZoomKey: Int
+        let vpWidth: Int
+        let vpHeight: Int
+    }
+
+    private var lastLayoutKey: LayoutKey?
     private var hoveredBlock: RenderedBlock?
     private var trackingArea: NSTrackingArea?
 
@@ -215,6 +230,7 @@ final class IcicleDocumentView: NSView {
 
     func configure(
         root: ViewNode?,
+        treeGeneration: UInt64,
         volume: VolumeInfo?,
         isRoot: Bool,
         baseDepth: Int,
@@ -225,9 +241,31 @@ final class IcicleDocumentView: NSView {
         vZoom: CGFloat,
         viewportSize: CGSize
     ) {
+        let prevHighlight = self.highlightRebuildsOnly
+        self.highlightRebuildsOnly = highlightRebuildsOnly
+
+        let key = LayoutKey(
+            treeGeneration: treeGeneration,
+            rootPath: root?.path ?? "",
+            isRoot: isRoot,
+            baseDepth: baseDepth,
+            maxDepth: maxDepth,
+            layoutMode: layoutMode,
+            hideFreeSpace: hideFreeSpace,
+            vZoomKey: Int((vZoom * 1000).rounded()),
+            vpWidth: Int(viewportSize.width.rounded()),
+            vpHeight: Int(viewportSize.height.rounded())
+        )
+        if key == lastLayoutKey {
+            if prevHighlight != highlightRebuildsOnly {
+                needsDisplay = true
+            }
+            return
+        }
+        lastLayoutKey = key
+
         self.baseDepth = baseDepth
         self.isRoot = isRoot
-        self.highlightRebuildsOnly = highlightRebuildsOnly
         self.volumeTotalBytes = max(1, volume?.totalBytes ?? root?.size ?? 1)
         self.volumeUsedBytes = max(1, volume?.usedBytes ?? root?.size ?? 1)
         self.volumeID = volume?.id ?? ""

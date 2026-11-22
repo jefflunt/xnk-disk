@@ -56,5 +56,6 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+touch "${APP_BUNDLE}"
 echo "Built ${APP_BUNDLE}"
 ls -lh "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"

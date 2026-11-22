@@ -160,9 +160,11 @@ public enum DevCacheClassifier {
         )
     ]
 
+    private static let cachedHome: String = FileManager.default.homeDirectoryForCurrentUser.path
+
     public static func classifyBuiltIn(node: DiskNode, parent: DiskNode?) -> NodeHint? {
         guard node.isDir else { return nil }
-        let p = cleanPath(node.path)
+        let p = node.path
 
         if let rel = userRelativePath(p), let hint = userPathIndex[rel] {
             return hint
@@ -245,8 +247,8 @@ public enum DevCacheClassifier {
     ) -> NodeHint? {
         guard node.isDir else { return nil }
         if let cfg = customRules, (!cfg.ignore.isEmpty || !cfg.add.isEmpty) {
-            let home = homeOverride ?? FileManager.default.homeDirectoryForCurrentUser.path
-            let p = cleanPath(node.path)
+            let home = homeOverride ?? Self.cachedHome
+            let p = node.path
 
             for rawIg in cfg.ignore {
                 let ig = rawIg.trimmingCharacters(in: .whitespacesAndNewlines)

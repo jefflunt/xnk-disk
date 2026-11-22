@@ -157,7 +157,8 @@ public final class DiskScanner: @unchecked Sendable {
     private let inodes = ShardedInodeSet()
     private let counters: ScanCounters
     private let startTime = DispatchTime.now()
-    private let workQueue = DispatchQueue(label: "com.jefflunt.xnk-disk.scanner", qos: .userInitiated, attributes: .concurrent)
+    // Use .utility QoS so up to 24 parallel I/O workers saturate NVMe without starving the main UI thread.
+    private let workQueue = DispatchQueue(label: "com.jefflunt.xnk-disk.scanner", qos: .utility, attributes: .concurrent)
 
     public init(options: ScanOptions) {
         self.options = options
