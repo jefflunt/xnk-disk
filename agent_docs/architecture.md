@@ -32,7 +32,7 @@
 
 ### 5. Safe Native Trash, Purge Rebuildable & Undo (`Sources/XnkDiskCore/TrashManager.swift`)
 - Uses `FileManager.default.trashItem(at:resultingItemURL:)` to move files/folders to the native macOS Trash.
-- **Purge Rebuildable**: Scoped to the currently focused folder, displays a confirmation sheet listing every rebuildable folder and total size, then moves each rebuildable folder's immediate top-level children to Trash while keeping the folder itself intact.
+- **Purge Rebuildable**: Scoped to the currently focused folder of the active window, displays a confirmation sheet listing every rebuildable folder with an individual macOS toggle switch and live total size. Toggled-off folders are discarded on **Cancel**, and on **Move Contents to Trash** are persisted as unmarked from `Rebuildable` in `rules.json` while each remaining enabled folder's immediate top-level children are moved to Trash (keeping the folder itself intact).
 - Records top-level `(originalPath, trashedPath)` pairs and `PurgedFolderSnapshot`s (or single removed nodes) in a unified `UndoEntry` stack, restoring all purged items via `FileManager.default.moveItem(at:to:)` and updating the in-memory `DiskNode` tree (`removePath` / `restoreNode` / `clearDirectoryContents` / `restoreDirectoryContents`) on **Undo** or `⌘Z`.
 - **Safety**: Protected system/root paths (`/`, `/System`, `/Users`, `/Applications`, volume mount points, etc.) are rejected; permanent deletion and Empty Trash are intentionally omitted.
 

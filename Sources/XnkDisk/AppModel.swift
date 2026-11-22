@@ -419,15 +419,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Purges ONLY the rebuildable folders within THIS window's selected disk / focused view.
-    func purgeRebuildable() {
+    /// Purges ONLY the enabled rebuildable folders within THIS window's selected disk / focused view.
+    /// Any folders toggled off in the confirmation sheet (`excludedPaths`) are persisted as no longer Rebuildable.
+    func purgeRebuildable(selectedPaths: [String], excludedPaths: [String] = []) {
         guard !store.isBusyMutating,
               let vol = selectedVolume,
               let res = store.scanResults[vol.id],
-              !rebuildableTargets.isEmpty else { return }
+              !selectedPaths.isEmpty else { return }
 
-        let targets = rebuildableTargets
-        let targetPaths = targets.map { $0.node.path }
+        if !excludedPaths.isEmpty {
+            store.unmarkRebuildsBatch(paths: excludedPaths)
+        }
+
+        let targetPaths = selectedPaths
         let volID = vol.id
         showPurgeSheet = false
         store.isBusyMutating = true

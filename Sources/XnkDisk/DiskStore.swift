@@ -139,11 +139,18 @@ final class DiskStore: ObservableObject {
     }
 
     func unmarkRebuilds(path: String) {
+        unmarkRebuildsBatch(paths: [path])
+    }
+
+    func unmarkRebuildsBatch(paths: [String]) {
+        guard !paths.isEmpty else { return }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let clean = cleanPath(path)
-        let dummy = DiskNode(name: (clean as NSString).lastPathComponent, path: clean, isDir: true)
-        let hasBuiltIn = DevCacheClassifier.classifyBuiltIn(node: dummy, parent: nil) != nil
-        customRules.unmarkPath(clean, home: home, hasBuiltIn: hasBuiltIn)
+        for path in paths {
+            let clean = cleanPath(path)
+            let dummy = DiskNode(name: (clean as NSString).lastPathComponent, path: clean, isDir: true)
+            let hasBuiltIn = DevCacheClassifier.classifyBuiltIn(node: dummy, parent: nil) != nil
+            customRules.unmarkPath(clean, home: home, hasBuiltIn: hasBuiltIn)
+        }
         try? CustomRulesStore.save(customRules)
         dataChanged.send(nil)
     }

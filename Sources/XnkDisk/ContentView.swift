@@ -4,6 +4,7 @@ import XnkDiskCore
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var hoverInfo: HoverTooltipState?
+    @State private var disabledPurgePaths: Set<String> = []
 
     private let surfaceBG = Color(red: 0x0c/255, green: 0x0c/255, blue: 0x0e/255)
     private let sidebarBG = Color(red: 0x14/255, green: 0x14/255, blue: 0x17/255)
@@ -588,7 +589,9 @@ struct ContentView: View {
     // MARK: - Purge Rebuildable Confirmation Sheet
     private var purgeConfirmationSheet: some View {
         let targets = model.rebuildableTargets
-        let totalSize = targets.reduce(UInt64(0)) { $0 + $1.node.size }
+        let enabledTargets = targets.filter { !disabledPurgePaths.contains($0.node.path) }
+        let excludedTargets = targets.filter { disabledPurgePaths.contains($0.node.path) }
+        let totalSize = enabledTargets.reduce(UInt64(0)) { $0 + $1.node.size }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
 
         return VStack(alignment: .leading, spacing: 14) {
@@ -599,22 +602,48 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Purge Rebuildable Contents on \(model.selectedVolume?.name ?? "Disk")?")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Moves the contents of \(targets.count) \(targets.count == 1 ? "folder" : "folders") (\(Formatters.bytes(totalSize))) in this view to Trash while keeping each folder in place. You can restore everything with Undo (⌘Z).")
-                        .font(.system(size: 12))
-                        .foregroundColor(mutedFG)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if excludedTargets.isEmpty {
+                        Text("Moves the contents of \(enabledTargets.count) \(enabledTargets.count == 1 ? "folder" : "folders") (\(Formatters.bytes(totalSize))) in this view to Trash while keeping each folder in place. You can restore everything with Undo (⌘Z).")
+                            .font(.system(size: 12))
+                            .foregroundColor(mutedFG)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Moves the contents of \(enabledTargets.count) of \(targets.count) folders (\(Formatters.bytes(totalSize))) to Trash. The \(excludedTargets.count) unchecked \(excludedTargets.count == 1 ? "folder" : "folders") will be unmarked as Rebuildable.")
+                            .font(.system(size: 12))
+                            .foregroundColor(mutedFG)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
             ScrollView {
                 VStack(spacing: 6) {
                     ForEach(targets) { item in
+                        let path = item.node.path
+                        let isEnabled = !disabledPurgePaths.contains(path)
+                        let toggleBinding = Binding<Bool>(
+                            get: { !disabledPurgePaths.contains(path) },
+                            set: { on in
+                                if on {
+                                    disabledPurgePaths.remove(path)
+                                } else {
+                                    disabledPurgePaths.insert(path)
+                                }
+                            }
+                        )
+
                         HStack(spacing: 10) {
+                            Toggle("", isOn: toggleBinding)
+                                .toggleStyle(.switch)
+                                .controlSize(.mini)
+                                .labelsHidden()
+                                .tint(emerald)
+
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.hint.label)
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundColor(.primary)
-                                Text(CustomRulesStore.collapseHome(item.node.path, home: home))
+                                Text(CustomRulesStore.collapseHome(path, home: home))
                                     .font(.system(size: 10.5, design: .monospaced))
                                     .foregroundColor(mutedFG)
                                     .lineLimit(1)
@@ -623,36 +652,45 @@ struct ContentView: View {
                             Spacer()
                             Text(Formatters.bytes(item.node.size))
                                 .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                                .foregroundColor(Color(red: 110/255, green: 231/255, blue: 183/255))
+                                .foregroundColor(isEnabled ? Color(red: 110/255, green: 231/255, blue: 183/255) : mutedFG)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(sidebarBG)
                         .cornerRadius(7)
                         .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        .opacity(isEnabled ? 1.0 : 0.48)
                     }
                 }
             }
-            .frame(maxHeight: 260)
+            .frame(maxHeight: 280)
 
             HStack {
                 Spacer()
                 Button("Cancel") {
+                    disabledPurgePaths.removeAll()
                     model.showPurgeSheet = false
                 }
                 .keyboardShortcut(.cancelAction)
 
                 Button("Move Contents to Trash") {
-                    model.purgeRebuildable()
+                    let selected = enabledTargets.map { $0.node.path }
+                    let excluded = excludedTargets.map { $0.node.path }
+                    disabledPurgePaths.removeAll()
+                    model.purgeRebuildable(selectedPaths: selected, excludedPaths: excluded)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(emerald)
+                .disabled(enabledTargets.isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 520)
+        .frame(width: 540)
         .background(surfaceBG)
         .preferredColorScheme(.dark)
+        .onAppear {
+            disabledPurgePaths.removeAll()
+        }
     }
 }
