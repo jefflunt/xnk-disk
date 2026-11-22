@@ -27,8 +27,6 @@
   // DOM refs
   const elDrivePills = document.getElementById('drive-pills');
   const elViewControls = document.getElementById('view-controls');
-  const elTopCapacity = document.getElementById('top-capacity');
-  const elScanMeta = document.getElementById('scan-meta');
   const elBtnHome = document.getElementById('btn-home');
   const elBtnScan = document.getElementById('btn-scan');
   const elBtnScanLabel = document.getElementById('btn-scan-label');
@@ -37,9 +35,9 @@
   const elBtnUndoLabel = document.getElementById('btn-undo-label');
   const elBtnTrash = document.getElementById('btn-trash');
   const elBtnReveal = document.getElementById('btn-reveal');
-  const elBtnRules = document.getElementById('btn-rules');
   const elBreadcrumbs = document.getElementById('breadcrumbs');
   const elCacheLegend = document.getElementById('cache-legend');
+  const elToggleRebuilds = document.getElementById('toggle-rebuilds');
   const elDepthHint = document.getElementById('depth-hint');
   const elScanStrip = document.getElementById('scan-strip');
   const elScanPath = document.getElementById('scan-path');
@@ -235,8 +233,6 @@
     });
   }
 
-  let rulesFileOpened = false;
-
   async function markRuleRebuilds(path, label) {
     const res = await fetch('/api/rules/mark', {
       method: 'POST',
@@ -247,7 +243,7 @@
       showToast('Could not save custom rule', { error: true });
       return;
     }
-    showToast(`Marked "${label}" as "Rebuilds itself"`);
+    showToast(`Marked "${label}" as "Rebuilds Itself"`);
     if (state.viewMode === 'icicle' && state.treeData) {
       await loadTree(state.treeData.volumeId, state.currentPath, { preserveView: true });
     }
@@ -263,20 +259,10 @@
       showToast('Could not update custom rules', { error: true });
       return;
     }
-    showToast(`Removed "Rebuilds itself" tag from "${label}"`);
+    showToast(`Removed "Rebuilds Itself" tag from "${label}"`);
     if (state.viewMode === 'icicle' && state.treeData) {
       await loadTree(state.treeData.volumeId, state.currentPath, { preserveView: true });
     }
-  }
-
-  async function openRulesFile() {
-    const res = await fetch('/api/rules/open', { method: 'POST' });
-    if (!res.ok) {
-      showToast('Could not open rules.json', { error: true });
-      return;
-    }
-    rulesFileOpened = true;
-    showToast('Opened rules.json — edits reload automatically when you return');
   }
 
   const PROTECTED_PATHS = new Set([
@@ -330,9 +316,9 @@
     }
     if (n.isDir && !n.path.endsWith('(direct files)') && n.path !== td.volumeId) {
       if (n.hint && n.hint.safety === 'rebuilds') {
-        items.push(`<button class="ctx-item" data-ctx="unmark"><span>Remove "Rebuilds itself" tag</span></button>`);
+        items.push(`<button class="ctx-item" data-ctx="unmark"><span>Remove "Rebuilds Itself" Tag</span></button>`);
       } else {
-        items.push(`<button class="ctx-item rebuilds" data-ctx="mark"><span>Mark as "Rebuilds itself"</span></button>`);
+        items.push(`<button class="ctx-item rebuilds" data-ctx="mark"><span>Mark as "Rebuilds Itself"</span></button>`);
       }
     }
     if (canTrash) {
@@ -478,26 +464,16 @@
       elBtnScan.disabled = true;
       spinIcon.classList.add('spinning');
       elBtnCancel.classList.remove('hidden');
-      elScanMeta.textContent = '';
     } else {
       elBtnScan.disabled = false;
       spinIcon.classList.remove('spinning');
       elBtnCancel.classList.add('hidden');
       if (vol && vol.scanned) {
         elBtnScanLabel.textContent = 'Rescan';
-        if (state.treeData && state.treeData.volumeId === vol.id) {
-          elScanMeta.textContent = `${fmtNum(state.treeData.totalFiles)} files`;
-        } else if (vol.scannedAt) {
-          elScanMeta.textContent = `Cached ${fmtTimeAgo(vol.scannedAt)}`;
-        } else {
-          elScanMeta.textContent = 'Cached';
-        }
       } else {
         elBtnScanLabel.textContent = 'Scan Disk';
-        elScanMeta.textContent = 'Not scanned';
       }
     }
-    renderTopCapacity();
   }
 
   function renderBreadcrumbs() {
@@ -506,7 +482,6 @@
       elBreadcrumbs.innerHTML = `<span class="crumb-btn current">Installed Drives</span>`;
       elDepthHint.textContent = 'Used vs. Available';
       elBtnReveal.classList.add('hidden');
-      if (elBtnRules) elBtnRules.classList.add('hidden');
       elBtnTrash.classList.add('hidden');
       if (elCacheLegend) elCacheLegend.classList.add('hidden');
       return;
@@ -539,7 +514,6 @@
     const baseLevel = Math.max(0, crumbs.length - 1);
     elDepthHint.textContent = `Levels L${baseLevel} → L${baseLevel + state.treeData.maxDepth}`;
     elBtnReveal.classList.remove('hidden');
-    if (elBtnRules) elBtnRules.classList.remove('hidden');
 
     const rootNode = state.treeData.root;
     if (isTrashable(rootNode, state.treeData.volumeId)) {
@@ -550,21 +524,7 @@
     }
   }
 
-  function renderTopCapacity() {
-    const vol = getSelectedVolume();
-    if (state.viewMode === 'icicle' && state.treeData) {
-      elTopCapacity.innerHTML = `<span>Used <strong>${fmtBytes(state.treeData.usedBytes)}</strong></span><span style="opacity:0.35">·</span><span>Avail <strong>${fmtBytes(state.treeData.availBytes)}</strong></span>`;
-      elTopCapacity.classList.remove('hidden');
-    } else if (vol) {
-      elTopCapacity.innerHTML = `<span>Used <strong>${fmtBytes(vol.usedBytes)}</strong></span><span style="opacity:0.35">·</span><span>Avail <strong>${fmtBytes(vol.availBytes)}</strong></span>`;
-      elTopCapacity.classList.remove('hidden');
-    } else {
-      elTopCapacity.classList.add('hidden');
-    }
-  }
-
   function renderFooterDefault() {
-    renderTopCapacity();
     if (elHoverTooltip) elHoverTooltip.classList.add('hidden');
   }
 
@@ -797,8 +757,9 @@
     }
     if (elCacheLegend) {
       elCacheLegend.classList.toggle('hidden', !hasVisibleRebuilds);
-      elCacheLegend.classList.toggle('active', state.highlightRebuildsOnly);
-      elCacheLegend.setAttribute('aria-pressed', state.highlightRebuildsOnly ? 'true' : 'false');
+    }
+    if (elToggleRebuilds) {
+      elToggleRebuilds.checked = state.highlightRebuildsOnly;
     }
 
     if (showFree && totalH - usedHeight >= 2) {
@@ -1046,18 +1007,6 @@
     }
   });
 
-  if (elBtnRules) {
-    elBtnRules.addEventListener('click', openRulesFile);
-  }
-
-  window.addEventListener('focus', () => {
-    if (!rulesFileOpened) return;
-    rulesFileOpened = false;
-    if (state.viewMode === 'icicle' && state.treeData) {
-      loadTree(state.treeData.volumeId, state.currentPath, { preserveView: true });
-    }
-  });
-
   elBtnTrash.addEventListener('click', () => {
     if (state.treeData && state.treeData.root) {
       moveToTrash(state.treeData.volumeId, state.treeData.root.path);
@@ -1149,11 +1098,9 @@
     });
   }
 
-  if (elCacheLegend) {
-    elCacheLegend.addEventListener('click', () => {
-      state.highlightRebuildsOnly = !state.highlightRebuildsOnly;
-      elCacheLegend.classList.toggle('active', state.highlightRebuildsOnly);
-      elCacheLegend.setAttribute('aria-pressed', state.highlightRebuildsOnly ? 'true' : 'false');
+  if (elToggleRebuilds) {
+    elToggleRebuilds.addEventListener('change', (e) => {
+      state.highlightRebuildsOnly = e.target.checked;
       applyDefaultBlockStyles();
     });
   }

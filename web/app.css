@@ -158,6 +158,8 @@ html, body {
 
 .segmented {
   display: inline-flex;
+  align-items: center;
+  height: 26px;
   background: var(--sidebar);
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -166,12 +168,15 @@ html, body {
 }
 
 .seg-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
-  padding: 3px 8px;
+  padding: 0 8px;
   border-radius: 5px;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
@@ -186,47 +191,118 @@ html, body {
 }
 
 .select-pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  height: 26px;
+  font-size: 11.5px;
   color: var(--muted);
   background: var(--sidebar);
   border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 4px 8px;
+  padding: 0 8px;
+  transition: border-color 120ms ease;
+}
+.select-pill:hover {
+  border-color: var(--border-frost);
 }
 .select-pill select {
+  appearance: none;
+  -webkit-appearance: none;
   border: none;
   background: transparent;
   color: var(--fg);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  padding-right: 14px;
   cursor: pointer;
   outline: none;
 }
+.select-chevron {
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+  color: var(--muted);
+}
 
-.checkbox-pill {
+/* Canonical macOS Sliding Toggle Switch */
+.mac-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 6px;
+  border-radius: 7px;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.mac-toggle:hover {
+  border-color: var(--border-frost);
+  color: var(--fg);
+}
+.mac-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.mac-toggle-track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+.mac-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: transform 150ms cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+.mac-toggle input:checked + .mac-toggle-track {
+  background: var(--primary);
+  border-color: rgba(47, 129, 247, 0.6);
+}
+.mac-toggle input:checked + .mac-toggle-track .mac-toggle-thumb {
+  transform: translateX(11px);
+}
+.mac-toggle input:checked ~ .mac-toggle-label {
+  color: var(--fg);
+}
+.mac-toggle.toggle-rebuilds input:checked + .mac-toggle-track {
+  background: var(--cache-rebuilds);
+  border-color: rgba(16, 185, 129, 0.65);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+.mac-toggle-label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--sidebar);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 4px 8px;
-  cursor: pointer;
-}
-.checkbox-pill input {
-  accent-color: var(--primary);
+  transition: color 120ms ease;
 }
 
 .zoom-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 26px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11px;
   font-weight: 600;
@@ -234,7 +310,7 @@ html, body {
   background: rgba(47, 129, 247, 0.14);
   border: 1px solid rgba(47, 129, 247, 0.42);
   border-radius: 7px;
-  padding: 4px 8px;
+  padding: 0 9px;
   cursor: pointer;
   white-space: nowrap;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
@@ -245,41 +321,17 @@ html, body {
   color: #ffffff;
 }
 
-.top-capacity {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--sidebar);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 4px 9px;
-  white-space: nowrap;
-}
-.top-capacity strong {
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.scan-meta {
-  font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
 .btn-primary {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  height: 26px;
+  padding: 0 11px;
   border-radius: 7px;
   border: none;
   background: var(--primary);
   color: var(--primary-fg);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -296,12 +348,15 @@ html, body {
 }
 
 .btn-secondary {
-  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
   border-radius: 7px;
   border: 1px solid var(--border);
   background: var(--sidebar);
   color: var(--fg);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -311,13 +366,19 @@ html, body {
 }
 
 .btn-ghost {
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--fg);
   font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 .btn-ghost:hover {
   border-color: var(--border-frost);
@@ -328,7 +389,8 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
+  height: 24px;
+  padding: 0 9px;
   border-radius: 6px;
   border: 1px solid rgba(244, 63, 94, 0.35);
   background: rgba(244, 63, 94, 0.10);
@@ -348,7 +410,8 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 9px;
+  height: 24px;
+  padding: 0 9px;
   border-radius: 6px;
   border: 1px solid rgba(255, 119, 34, 0.42);
   background: rgba(255, 119, 34, 0.12);
@@ -534,38 +597,13 @@ html, body {
   font-size: 11px;
   color: var(--fg);
 }
-.cache-legend {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2.5px 8px;
-  border-radius: 999px;
-  background: rgba(16, 185, 129, 0.10);
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  color: #6ee7b7;
-  font-size: 10.5px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-}
-.cache-legend:hover {
-  background: rgba(16, 185, 129, 0.20);
-  border-color: rgba(16, 185, 129, 0.65);
-  color: #d1fae5;
-}
-.cache-legend.active {
-  background: rgba(16, 185, 129, 0.28);
-  border-color: rgba(110, 231, 183, 0.9);
-  color: #ffffff;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.38);
-}
 .cache-legend-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--cache-rebuilds);
   box-shadow: 0 0 6px rgba(16, 185, 129, 0.7);
+  flex-shrink: 0;
 }
 
 @keyframes spin {

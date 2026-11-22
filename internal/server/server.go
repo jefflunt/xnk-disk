@@ -84,7 +84,6 @@ func (s *Server) Start() (string, error) {
 	mux.HandleFunc("GET /api/trash/status", s.handleTrashStatus)
 	mux.HandleFunc("POST /api/rules/mark", s.handleRulesMark)
 	mux.HandleFunc("POST /api/rules/unmark", s.handleRulesUnmark)
-	mux.HandleFunc("POST /api/rules/open", s.handleRulesOpen)
 
 	staticFS, err := fs.Sub(web.Assets, ".")
 	if err != nil {
@@ -395,21 +394,6 @@ func (s *Server) handleRulesUnmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "path": clean})
-}
-
-func (s *Server) handleRulesOpen(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	err := scanner.EnsureRulesFile(s.rulesPath)
-	rulesPath := s.rulesPath
-	s.mu.Unlock()
-	if err != nil || rulesPath == "" {
-		http.Error(w, "could not prepare rules.json", http.StatusInternalServerError)
-		return
-	}
-	if err := exec.Command("open", rulesPath).Start(); err != nil {
-		_ = exec.Command("open", "-t", rulesPath).Start()
-	}
-	writeJSON(w, map[string]any{"ok": true, "path": rulesPath})
 }
 
 func (s *Server) undoSummaryLocked() (int, string) {
