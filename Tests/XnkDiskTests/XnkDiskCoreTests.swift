@@ -222,4 +222,86 @@ final class XnkDiskCoreTests: XCTestCase {
         let reloaded = PreferencesStore.load(from: defaults)
         XCTAssertEqual(reloaded, custom)
     }
+
+    // MARK: - Purge Rebuildable Tree + Trash Round-Trip
+    func testCollectRebuildableAndClearRestoreTree() {
+        let nested = DiskNode(
+            name: "node_modules",
+            path: "/Users/alice/code/app/node_modules/pkg/node_modules",
+            size: 100, files: 2, dirs: 1, isDir: true
+        )
+        let nm = DiskNode(
+            name: "node_modules",
+            path: "/Users/alice/code/app/node_modules",
+            size: 4000, apparent: 4000, files: 50, dirs: 5, isDir: true,
+            children: [nested]
+        )
+        let src = DiskNode(name: "src", path: "/Users/alice/code/app/src", size: 500, apparent: 500, files: 10, dirs: 1, isDir: true)
+        let app = DiskNode(
+            name: "app", path: "/Users/alice/code/app",
+            size: 4500, apparent: 4500, files: 60, dirs: 7, isDir: true,
+            children: [nm, src]
+        )
+
+        let targets = app.collectRebuildableFolders(homeOverride: "/Users/alice")
+        // Should collect only top-level node_modules, not nested node_modules inside it.
+        XCTAssertEqual(targets.count, 1)
+        XCTAssertEqual(targets[0].node.path, nm.path)
+
+        // Clear contents while keeping node_modules folder in tree.
+        guard let snap = app.clearDirectoryContents(at: nm.path) else {
+            XCTFail("Expected clearDirectoryContents to return snapshot")
+            return
+        }
+        XCTAssertEqual(nm.size, 0)
+        XCTAssertTrue(nm.children.isEmpty)
+        XCTAssertEqual(app.size, 500)
+        XCTAssertEqual(app.files, 10)
+        XCTAssertEqual(app.children.count, 2) // node_modules folder itself stays in tree
+
+        // Restore brings back all children and ancestor totals.
+        XCTAssertTrue(app.restoreDirectoryContents(snap))
+        XCTAssertEqual(nm.size, 4000)
+        XCTAssertEqual(nm.children.count, 1)
+        XCTAssertEqual(app.size, 4500)
+        XCTAssertEqual(app.files, 60)
+    }
+
+    func testPurgeDirectoryContentsAndRestoreRoundTrip() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("xnk-purge-\(UUID().uuidString)")
+        let cacheDir = base.appendingPathComponent("DerivedData")
+        let subDir = cacheDir.appendingPathComponent("MyApp-xyz/Build")
+        try fm.createDirectory(at: subDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+
+        let fileA = cacheDir.appendingPathComponent("top.txt")
+        let fileB = subDir.appendingPathComponent("artifact.bin")
+        try Data("hello".utf8).write(to: fileA)
+        try Data("world".utf8).write(to: fileB)
+
+        let mockTrash = base.appendingPathComponent(".MockTrash")
+        try fm.createDirectory(at: mockTrash, withIntermediateDirectories: true)
+
+        // Purge contents of cacheDir (keeps cacheDir itself!)
+        let purge = try TrashManager.purgeDirectoryContents(at: cacheDir.path, volumeID: base.path) { srcURL in
+            let dst = mockTrash.appendingPathComponent(UUID().uuidString + "-" + srcURL.lastPathComponent)
+            try fm.moveItem(at: srcURL, to: dst)
+            return dst.path
+        }
+        XCTAssertEqual(purge.failedCount, 0)
+        XCTAssertEqual(purge.movedItems.count, 2) // only top-level: "top.txt" and "MyApp-xyz"
+
+        var isDir: ObjCBool = false
+        XCTAssertTrue(fm.fileExists(atPath: cacheDir.path, isDirectory: &isDir) && isDir.boolValue, "Parent cache folder must remain")
+        let remaining = try fm.contentsOfDirectory(atPath: cacheDir.path)
+        XCTAssertTrue(remaining.isEmpty, "Cache folder should be empty after purge")
+
+        // Restore ALL top-level trashed items back
+        let restored = TrashManager.restoreItems(purge.movedItems)
+        XCTAssertEqual(restored.failed, 0)
+        XCTAssertEqual(restored.restored, 2)
+        XCTAssertEqual(try String(contentsOf: fileA, encoding: .utf8), "hello")
+        XCTAssertEqual(try String(contentsOf: fileB, encoding: .utf8), "world")
+    }
 }

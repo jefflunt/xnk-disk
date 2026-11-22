@@ -30,10 +30,10 @@
 - Completed scans—as well as live tree updates from **Move to Trash** and **Undo**—are atomically persisted as binary PropertyLists compressed with hardware-accelerated **LZFSE** in `~/Library/Caches/com.jefflunt.xnk-disk/scans-native/`.
 - On startup, `AppModel` reloads cached scans immediately so users can open **View Breakdown** without rescanning.
 
-### 5. Safe Native Trash & Undo (`Sources/XnkDiskCore/TrashManager.swift`)
+### 5. Safe Native Trash, Purge Rebuildable & Undo (`Sources/XnkDiskCore/TrashManager.swift`)
 - Uses `FileManager.default.trashItem(at:resultingItemURL:)` to move files/folders to the native macOS Trash.
-- Records `resultingItemURL` on an in-memory Undo stack and restores items via `FileManager.default.moveItem(at:to:)` on **Undo** or `⌘Z`.
-- Prunes and re-inserts nodes directly in the in-memory `DiskNode` tree (`removePath` / `restoreNode`) so the visualization updates instantaneously.
+- **Purge Rebuildable**: Scoped to the currently focused folder, displays a confirmation sheet listing every rebuildable folder and total size, then moves each rebuildable folder's immediate top-level children to Trash while keeping the folder itself intact.
+- Records top-level `(originalPath, trashedPath)` pairs and `PurgedFolderSnapshot`s (or single removed nodes) in a unified `UndoEntry` stack, restoring all purged items via `FileManager.default.moveItem(at:to:)` and updating the in-memory `DiskNode` tree (`removePath` / `restoreNode` / `clearDirectoryContents` / `restoreDirectoryContents`) on **Undo** or `⌘Z`.
 - **Safety**: Protected system/root paths (`/`, `/System`, `/Users`, `/Applications`, volume mount points, etc.) are rejected; permanent deletion and Empty Trash are intentionally omitted.
 
 ### 6. CoreGraphics Horizontal Icicle & Developer Cache Classification (`Sources/XnkDisk/IcicleView.swift`, `Sources/XnkDiskCore/DevCache.swift`, `Sources/XnkDiskCore/CustomRules.swift`)

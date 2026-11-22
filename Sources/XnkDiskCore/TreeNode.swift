@@ -7,6 +7,42 @@ public struct Crumb: Identifiable, Hashable {
     public let size: UInt64
 }
 
+public struct PurgedFolderSnapshot: Sendable {
+    public let folderPath: String
+    public let oldChildren: [DiskNode]
+    public let oldSize: UInt64
+    public let oldApparent: UInt64
+    public let oldFiles: Int64
+    public let oldDirs: Int64
+
+    public init(
+        folderPath: String,
+        oldChildren: [DiskNode],
+        oldSize: UInt64,
+        oldApparent: UInt64,
+        oldFiles: Int64,
+        oldDirs: Int64
+    ) {
+        self.folderPath = folderPath
+        self.oldChildren = oldChildren
+        self.oldSize = oldSize
+        self.oldApparent = oldApparent
+        self.oldFiles = oldFiles
+        self.oldDirs = oldDirs
+    }
+}
+
+public struct RebuildableTarget: Identifiable {
+    public var id: String { node.path }
+    public let node: DiskNode
+    public let hint: NodeHint
+
+    public init(node: DiskNode, hint: NodeHint) {
+        self.node = node
+        self.hint = hint
+    }
+}
+
 public final class DiskNode: Codable, @unchecked Sendable {
     public var name: String
     public var path: String
@@ -143,6 +179,109 @@ public final class DiskNode: Codable, @unchecked Sendable {
             return false
         }
         return walk(self)
+    }
+
+    /// Empties a directory node's children and zeroes its stats while keeping the directory node itself,
+    /// updating all ancestor totals, and returns a snapshot for instant Undo.
+    public func clearDirectoryContents(at targetPath: String) -> PurgedFolderSnapshot? {
+        let cleanTarget = cleanPath(targetPath)
+        guard !cleanTarget.isEmpty else { return nil }
+
+        var snapshot: PurgedFolderSnapshot?
+        func walk(_ cur: DiskNode) -> Bool {
+            if cleanPath(cur.path) == cleanTarget {
+                snapshot = PurgedFolderSnapshot(
+                    folderPath: cur.path,
+                    oldChildren: cur.children,
+                    oldSize: cur.size,
+                    oldApparent: cur.apparent,
+                    oldFiles: cur.files,
+                    oldDirs: cur.dirs
+                )
+                cur.children = []
+                cur.size = 0
+                cur.apparent = 0
+                cur.files = 0
+                cur.dirs = 0
+                return true
+            }
+            for child in cur.children {
+                let cp = cleanPath(child.path)
+                if cp == cleanTarget || cleanTarget.hasPrefix(cp + "/") || cp == "/" {
+                    if walk(child), let snap = snapshot {
+                        cur.size = cur.size >= snap.oldSize ? (cur.size - snap.oldSize) : 0
+                        cur.apparent = cur.apparent >= snap.oldApparent ? (cur.apparent - snap.oldApparent) : 0
+                        cur.files = max(0, cur.files - snap.oldFiles)
+                        cur.dirs = max(0, cur.dirs - snap.oldDirs)
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        return walk(self) ? snapshot : nil
+    }
+
+    /// Restores a previously cleared directory node's children and stats, updating all ancestors.
+    @discardableResult
+    public func restoreDirectoryContents(_ snap: PurgedFolderSnapshot) -> Bool {
+        let cleanTarget = cleanPath(snap.folderPath)
+        guard !cleanTarget.isEmpty else { return false }
+
+        func walk(_ cur: DiskNode) -> Bool {
+            if cleanPath(cur.path) == cleanTarget {
+                cur.children = snap.oldChildren
+                cur.size = snap.oldSize
+                cur.apparent = snap.oldApparent
+                cur.files = snap.oldFiles
+                cur.dirs = snap.oldDirs
+                return true
+            }
+            for child in cur.children {
+                let cp = cleanPath(child.path)
+                if cp == cleanTarget || cleanTarget.hasPrefix(cp + "/") || cp == "/" {
+                    if walk(child) {
+                        cur.size += snap.oldSize
+                        cur.apparent += snap.oldApparent
+                        cur.files += snap.oldFiles
+                        cur.dirs += snap.oldDirs
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        return walk(self)
+    }
+
+    /// Collects all top-level Rebuildable directories within this subtree, without double-collecting
+    /// nested rebuildable folders inside an already-matched rebuildable directory.
+    public func collectRebuildableFolders(
+        parent: DiskNode? = nil,
+        customRules: CustomRulesConfig? = nil,
+        homeOverride: String? = nil
+    ) -> [RebuildableTarget] {
+        var found: [RebuildableTarget] = []
+        func walk(_ cur: DiskNode, _ par: DiskNode?) {
+            guard cur.isDir else { return }
+            if cur.size > 0,
+               let hint = DevCacheClassifier.classify(node: cur, parent: par, customRules: customRules, homeOverride: homeOverride),
+               hint.safety == .rebuilds {
+                found.append(RebuildableTarget(node: cur, hint: hint))
+                return
+            }
+            for child in cur.children {
+                walk(child, cur)
+            }
+        }
+        walk(self, parent)
+        found.sort { a, b in
+            if a.node.size != b.node.size { return a.node.size > b.node.size }
+            return a.node.path < b.node.path
+        }
+        return found
     }
 
     private func subStats(ancestor: DiskNode, child: DiskNode) {

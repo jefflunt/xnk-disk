@@ -55,6 +55,9 @@ struct ContentView: View {
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $model.showPurgeSheet) {
+            purgeConfirmationSheet
+        }
     }
 
     // MARK: - Top Toolbar
@@ -167,6 +170,26 @@ struct ContentView: View {
                     .fixedSize()
                     .disabled(!model.hasVisibleRebuilds)
                     .opacity(model.hasVisibleRebuilds ? 1.0 : 0.45)
+
+                    Button(action: { model.showPurgeSheet = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text(model.isPurging ? "Purging…" : "Purge Rebuildable")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(Color(red: 110/255, green: 231/255, blue: 183/255))
+                        .padding(.horizontal, 8)
+                        .frame(height: 24)
+                        .background(emerald.opacity(0.14))
+                        .cornerRadius(6)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(emerald.opacity(0.42), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .disabled(model.rebuildableTargets.isEmpty || model.isPurging)
+                    .opacity((model.rebuildableTargets.isEmpty || model.isPurging) ? 0.4 : 1.0)
+                    .help("Move the contents of all Rebuildable folders in this view to Trash (keeps folders in place; supports Undo)")
 
                     if model.vZoom > 1.01 {
                         Button(action: { model.resetZoom() }) {
@@ -560,5 +583,76 @@ struct ContentView: View {
                 .stroke(toast.isError ? Color.red.opacity(0.55) : Color(red: 214/255, green: 235/255, blue: 253/255).opacity(0.28), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.55), radius: 14, y: 6)
+    }
+
+    // MARK: - Purge Rebuildable Confirmation Sheet
+    private var purgeConfirmationSheet: some View {
+        let targets = model.rebuildableTargets
+        let totalSize = targets.reduce(UInt64(0)) { $0 + $1.node.size }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "trash.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundColor(emerald)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Purge Rebuildable Contents?")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("Moves the contents of \(targets.count) \(targets.count == 1 ? "folder" : "folders") (\(Formatters.bytes(totalSize))) to Trash while keeping each folder in place. You can restore everything with Undo (⌘Z).")
+                        .font(.system(size: 12))
+                        .foregroundColor(mutedFG)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(targets) { item in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.hint.label)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                Text(CustomRulesStore.collapseHome(item.node.path, home: home))
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundColor(mutedFG)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            Text(Formatters.bytes(item.node.size))
+                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                .foregroundColor(Color(red: 110/255, green: 231/255, blue: 183/255))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(sidebarBG)
+                        .cornerRadius(7)
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    }
+                }
+            }
+            .frame(maxHeight: 260)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    model.showPurgeSheet = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Move Contents to Trash") {
+                    model.purgeRebuildable()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(emerald)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .background(surfaceBG)
+        .preferredColorScheme(.dark)
     }
 }

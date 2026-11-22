@@ -42,6 +42,9 @@ final class AppModel: ObservableObject {
     @Published var isAtVolumeRoot: Bool = true
     @Published var currentPath: String = ""
     @Published var hasVisibleRebuilds: Bool = false
+    @Published var rebuildableTargets: [RebuildableTarget] = []
+    @Published var showPurgeSheet: Bool = false
+    @Published var isPurging: Bool = false
 
     @Published var undoStack: [UndoEntry] = []
     @Published var toast: ToastMessage?
@@ -147,7 +150,8 @@ final class AppModel: ObservableObject {
         deepestLevel = deepest
         isAtVolumeRoot = isRoot
         currentPath = projected.path
-        hasVisibleRebuilds = containsRebuildsHint(projected)
+        rebuildableTargets = focusNode.collectRebuildableFolders(customRules: customRules)
+        hasVisibleRebuilds = !rebuildableTargets.isEmpty || containsRebuildsHint(projected)
         if resetZoom {
             vZoom = 1.0
         }
@@ -264,11 +268,61 @@ final class AppModel: ObservableObject {
     }
 
     func undoLastTrash() {
-        guard let entry = undoStack.popLast() else { return }
+        guard !isPurging, let entry = undoStack.popLast() else { return }
+
+        if !entry.purgedFolders.isEmpty {
+            isPurging = true
+            let items = entry.items
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let outcome = TrashManager.restoreItems(items)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.isPurging = false
+                    if outcome.restored == 0 && outcome.failed > 0 {
+                        self.undoStack.append(entry)
+                        self.showToast("Could not restore purged items from Trash", isError: true)
+                        return
+                    }
+                    if let res = self.scanResults[entry.volumeID] {
+                        for snap in entry.purgedFolders {
+                            res.root.restoreDirectoryContents(snap)
+                        }
+                        res.root.sortRecursive()
+                        let updatedRes = ScanResult(
+                            volumeID: res.volumeID,
+                            volumeName: res.volumeName,
+                            root: res.root,
+                            totalFiles: res.root.files,
+                            totalDirs: res.root.dirs,
+                            skippedPerm: res.skippedPerm,
+                            scannedAt: res.scannedAt,
+                            durationMs: res.durationMs
+                        )
+                        self.scanResults[entry.volumeID] = updatedRes
+                        DispatchQueue.global(qos: .utility).async {
+                            try? ScanCacheStore.save(updatedRes)
+                        }
+                    }
+                    let msg = outcome.failed > 0
+                        ? "Restored \"\(entry.name)\" (\(outcome.failed) items could not be restored)"
+                        : "Restored \"\(entry.name)\" from Trash"
+                    self.showToast(msg)
+                    if self.viewMode == .icicle && self.selectedVolumeID == entry.volumeID {
+                        self.reloadCurrentTree(resetZoom: false)
+                    }
+                }
+            }
+            return
+        }
+
+        guard let item = entry.items.first,
+              let parentPath = entry.singleRemovedParentPath,
+              let removedNode = entry.singleRemovedNode else { return }
+
         do {
-            try TrashManager.restore(trashedPath: entry.trashedPath, to: entry.originalPath)
+            try TrashManager.restore(trashedPath: item.trashedPath, to: item.originalPath)
             if let res = scanResults[entry.volumeID] {
-                res.root.restoreNode(parentPath: entry.parentPath, restored: entry.removedNode)
+                res.root.restoreNode(parentPath: parentPath, restored: removedNode)
                 let updatedRes = ScanResult(
                     volumeID: res.volumeID,
                     volumeName: res.volumeName,
@@ -291,6 +345,90 @@ final class AppModel: ObservableObject {
         } catch {
             undoStack.append(entry)
             showToast("Could not restore: \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    func purgeRebuildable() {
+        guard !isPurging,
+              let vol = selectedVolume,
+              let res = scanResults[vol.id],
+              !rebuildableTargets.isEmpty else { return }
+
+        let targets = rebuildableTargets
+        let targetPaths = targets.map { $0.node.path }
+        let volID = vol.id
+        showPurgeSheet = false
+        isPurging = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var allMoved: [TrashedItem] = []
+            var purgedPaths: [String] = []
+            var totalFailed = 0
+
+            for path in targetPaths {
+                do {
+                    let r = try TrashManager.purgeDirectoryContents(at: path, volumeID: volID)
+                    if !r.movedItems.isEmpty {
+                        allMoved.append(contentsOf: r.movedItems)
+                        purgedPaths.append(path)
+                    }
+                    totalFailed += r.failedCount
+                } catch {
+                    totalFailed += 1
+                }
+            }
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isPurging = false
+
+                guard !allMoved.isEmpty else {
+                    self.showToast("No rebuildable items could be moved to Trash", isError: true)
+                    return
+                }
+
+                var snapshots: [PurgedFolderSnapshot] = []
+                for p in purgedPaths {
+                    if let snap = res.root.clearDirectoryContents(at: p) {
+                        snapshots.append(snap)
+                    }
+                }
+                res.root.sortRecursive()
+
+                let folderCount = snapshots.count
+                let label = folderCount == 1
+                    ? "Purge (\(URL(fileURLWithPath: snapshots[0].folderPath).lastPathComponent))"
+                    : "Purge (\(folderCount) folders)"
+
+                self.undoStack.append(UndoEntry(
+                    volumeID: volID,
+                    name: label,
+                    items: allMoved,
+                    purgedFolders: snapshots
+                ))
+
+                let updatedRes = ScanResult(
+                    volumeID: res.volumeID,
+                    volumeName: res.volumeName,
+                    root: res.root,
+                    totalFiles: res.root.files,
+                    totalDirs: res.root.dirs,
+                    skippedPerm: res.skippedPerm,
+                    scannedAt: res.scannedAt,
+                    durationMs: res.durationMs
+                )
+                self.scanResults[volID] = updatedRes
+                DispatchQueue.global(qos: .utility).async {
+                    try? ScanCacheStore.save(updatedRes)
+                }
+
+                let totalFreed = snapshots.reduce(UInt64(0)) { $0 + $1.oldSize }
+                let summary = totalFailed > 0
+                    ? "Moved \(Formatters.bytes(totalFreed)) from \(folderCount) folders to Trash (\(totalFailed) skipped)"
+                    : "Moved \(Formatters.bytes(totalFreed)) from \(folderCount) rebuildable folders to Trash"
+                self.showToast(summary, showUndo: true)
+                self.reloadCurrentTree(resetZoom: false)
+            }
         }
     }
 
