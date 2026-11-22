@@ -1,6 +1,7 @@
 # Build artifacts
 dist/
-xnk-disk
+.build/
+.swiftpm/
 XNK Disk
 
 # macOS & temporary files
