@@ -11,6 +11,7 @@
     layoutMode: 'scroll', // 'scroll' | 'fit'
     maxDepth: 10,         // 5 | 10 | 20 | 50 | 0 (unlimited)
     groupSmall: false,
+    vZoom: 1,             // Vertical-only zoom factor (1..25)
     scanning: false,
     scanningVolumeId: null,
     treeData: null,
@@ -35,6 +36,7 @@
   const elBtnTrash = document.getElementById('btn-trash');
   const elBtnReveal = document.getElementById('btn-reveal');
   const elBreadcrumbs = document.getElementById('breadcrumbs');
+  const elCacheLegend = document.getElementById('cache-legend');
   const elDepthHint = document.getElementById('depth-hint');
   const elScanStrip = document.getElementById('scan-strip');
   const elScanPath = document.getElementById('scan-path');
@@ -46,6 +48,7 @@
   const elModeFit = document.getElementById('mode-fit');
   const elSelectDepth = document.getElementById('select-depth');
   const elToggleGroup = document.getElementById('toggle-group');
+  const elBtnZoomReset = document.getElementById('btn-zoom-reset');
   const elContextMenu = document.getElementById('context-menu');
   const elToast = document.getElementById('toast');
 
@@ -121,6 +124,8 @@
     state.treeData = await res.json();
     state.currentPath = state.treeData.root.path;
     state.viewMode = 'icicle';
+    state.vZoom = 1;
+    elViewport.scrollTop = 0;
     renderAll();
   }
 
@@ -271,8 +276,13 @@
     }
     if (!items.length) return;
 
+    const hintHtml = n.hint
+      ? `<div class="ctx-hint-row"><span>${escapeHtml(n.hint.label)}</span><span class="hint-pill ${escapeHtml(n.hint.safety)}">${escapeHtml(n.hint.tag)}</span></div>`
+      : '';
+
     elContextMenu.innerHTML = `
       <div class="ctx-header" title="${escapeHtml(n.path)}">${escapeHtml(n.name)}</div>
+      ${hintHtml}
       ${items.join('')}
     `;
     elContextMenu.classList.remove('hidden');
@@ -394,6 +404,7 @@
     elViewControls.classList.toggle('hidden', state.viewMode !== 'icicle');
     elModeScroll.classList.toggle('active', state.layoutMode === 'scroll');
     elModeFit.classList.toggle('active', state.layoutMode === 'fit');
+    renderZoomPill();
 
     const spinIcon = elBtnScan.querySelector('.icon-spin-target');
     if (state.scanning) {
@@ -430,6 +441,7 @@
       elDepthHint.textContent = 'Used vs. Available';
       elBtnReveal.classList.add('hidden');
       elBtnTrash.classList.add('hidden');
+      if (elCacheLegend) elCacheLegend.classList.add('hidden');
       return;
     }
 
@@ -563,12 +575,67 @@
     });
   }
 
+  // ---- Vertical Zoom Helpers ----
+  const MIN_VZOOM = 1;
+  const MAX_VZOOM = 25;
+  const COL_HEAD_H = 26;
+
+  function getBaseIcicleHeight() {
+    return Math.max(380, elViewport.clientHeight - 38);
+  }
+
+  function renderZoomPill() {
+    if (!elBtnZoomReset) return;
+    if (state.viewMode === 'icicle' && state.vZoom > 1.01) {
+      elBtnZoomReset.textContent = `${state.vZoom.toFixed(1)}× · Reset`;
+      elBtnZoomReset.classList.remove('hidden');
+    } else {
+      elBtnZoomReset.classList.add('hidden');
+    }
+  }
+
+  let zoomRafId = null;
+  let pendingZoom = null;
+
+  function scheduleVerticalZoom(nextZoom, anchorClientY) {
+    const clamped = Math.min(MAX_VZOOM, Math.max(MIN_VZOOM, nextZoom));
+    pendingZoom = { zoom: clamped, anchorClientY };
+    if (zoomRafId !== null) return;
+    zoomRafId = requestAnimationFrame(() => {
+      zoomRafId = null;
+      const req = pendingZoom;
+      pendingZoom = null;
+      if (!req || state.viewMode !== 'icicle' || !state.treeData) return;
+      const oldZoom = state.vZoom;
+      const newZoom = req.zoom;
+      if (Math.abs(newZoom - oldZoom) < 0.005) return;
+
+      const baseH = getBaseIcicleHeight();
+      const vpRect = elViewport.getBoundingClientRect();
+      const anchorY = typeof req.anchorClientY === 'number'
+        ? req.anchorClientY - vpRect.top
+        : vpRect.height / 2;
+      const prevScrollLeft = elViewport.scrollLeft;
+      const contentY = elViewport.scrollTop + anchorY - COL_HEAD_H;
+      const ratio = Math.max(0, contentY) / Math.max(1, baseH * oldZoom);
+
+      state.vZoom = newZoom;
+      renderZoomPill();
+      renderIcicle();
+
+      const nextScrollTop = Math.max(0, ratio * (baseH * newZoom) - (anchorY - COL_HEAD_H));
+      elViewport.scrollTop = nextScrollTop;
+      elViewport.scrollLeft = prevScrollLeft;
+    });
+  }
+
   // ---- Horizontal Icicle Renderer ----
   function renderIcicle() {
     const td = state.treeData;
     if (!td || !td.root) return;
 
-    const totalH = Math.max(380, elViewport.clientHeight - 38);
+    const baseH = getBaseIcicleHeight();
+    const totalH = Math.round(baseH * state.vZoom);
     const isRoot = td.isRoot;
     const baseDepth = Math.max(0, (td.breadcrumbs || []).length - 1);
 
@@ -605,8 +672,15 @@
       : totalH;
     const scaleBytes = isRoot ? td.totalBytes : Math.max(1, rootDisplaySize);
 
-    function walk(node, relDepth, yStart, height, color, ancestorPaths) {
+    let hasVisibleRebuilds = false;
+
+    function walk(node, relDepth, yStart, height, color, ancestorPaths, inRebuilds) {
       if (relDepth >= cols.length || height < 1.2) return;
+
+      const isRebuildsHint = !!(node.hint && node.hint.safety === 'rebuilds');
+      const nodeInRebuilds = inRebuilds || isRebuildsHint;
+      const nodeColor = nodeInRebuilds ? 'var(--cache-rebuilds)' : color;
+      if (nodeInRebuilds) hasVisibleRebuilds = true;
 
       const myAncestors = [...ancestorPaths, node.path];
       cols[relDepth].push({
@@ -615,7 +689,8 @@
         absDepth: baseDepth + relDepth,
         y: yStart,
         h: height,
-        color,
+        color: nodeColor,
+        inRebuilds: nodeInRebuilds,
         ancestorPaths: myAncestors
       });
 
@@ -627,20 +702,23 @@
       kids.forEach((child, i) => {
         const ch = ((child.size || 0) / sumKids) * height;
         // Assign distinct colors at depth 1 (immediate children of focused root), inherit deeper
-        let childColor = color;
-        if (relDepth === 0) {
+        let childColor = nodeColor;
+        if (relDepth === 0 && !nodeInRebuilds) {
           childColor = child.isSystemGap || child.isGrouped
             ? 'var(--c-muted)'
             : PALETTE[i % PALETTE.length];
         } else if (child.isGrouped) {
           childColor = 'var(--c-muted)';
         }
-        walk(child, relDepth + 1, curY, ch, childColor, myAncestors);
+        walk(child, relDepth + 1, curY, ch, childColor, myAncestors, nodeInRebuilds);
         curY += ch;
       });
     }
 
-    walk(rootClone, 0, 0, usedHeight, 'var(--c0)', []);
+    walk(rootClone, 0, 0, usedHeight, 'var(--c0)', [], false);
+    if (elCacheLegend) {
+      elCacheLegend.classList.toggle('hidden', !hasVisibleRebuilds);
+    }
 
     if (isRoot && td.totalBytes > 0 && totalH - usedHeight >= 2) {
       cols[0].push({
@@ -682,21 +760,25 @@
 
         const showTitle = item.h >= 20;
         const showSub = item.h >= 36;
+        const showHintLine = !!(n.hint && item.h >= 54);
+        const showHintDot = !!(n.hint && showTitle && !showHintLine);
         const pct = ((n.size / scaleBytes) * 100).toFixed(1);
         const gap = item.h >= 10 ? 3 : item.h >= 5 ? 2 : 1;
         const blockH = Math.max(item.h - gap, 1.5);
         const radius = blockH >= 20 ? 7 : blockH >= 11 ? 4 : blockH >= 5 ? 2.5 : 1;
+        const cacheCls = item.inRebuilds ? 'cache-rebuilds' : '';
 
         return `
           <div
-            class="icicle-block ${clickable ? 'clickable' : ''} ${isFree ? 'free-space' : ''} ${isGap ? 'system-gap' : ''}"
+            class="icicle-block ${clickable ? 'clickable' : ''} ${isFree ? 'free-space' : ''} ${isGap ? 'system-gap' : ''} ${cacheCls}"
             data-idx="${idx}"
             data-path="${escapeHtml(n.path)}"
             data-base-opacity="${baseOpacity}"
             style="top:${item.y}px; height:${blockH}px; border-radius:${radius}px; background:${item.color}; opacity:${baseOpacity};"
           >
-            ${showTitle ? `<div class="icicle-block-title">${escapeHtml(n.name)}</div>` : ''}
+            ${showTitle ? `<div class="icicle-block-title-row">${showHintDot ? `<span class="hint-dot ${escapeHtml(n.hint.safety)}"></span>` : ''}<div class="icicle-block-title">${escapeHtml(n.name)}</div></div>` : ''}
             ${showSub ? `<div class="icicle-block-sub">${fmtBytes(n.size)} · ${pct}%</div>` : ''}
+            ${showHintLine ? `<div class="icicle-block-hint"><span class="icicle-block-hint-tag ${escapeHtml(n.hint.safety)}">${escapeHtml(n.hint.tag)}</span><span>${escapeHtml(n.hint.label)}</span></div>` : ''}
           </div>
         `;
       }).join('');
@@ -810,7 +892,16 @@
     const td = state.treeData;
     const pctUsed = td.usedBytes > 0 ? ((item.node.size / td.usedBytes) * 100).toFixed(1) : '0';
     const pctDisk = td.totalBytes > 0 ? ((item.node.size / td.totalBytes) * 100).toFixed(1) : '0';
+    const hint = item.node.hint;
+    const hintBlock = hint ? `
+      <div class="hover-tooltip-hint">
+        <span class="hover-tooltip-label">${escapeHtml(hint.label)}</span>
+        <span class="hint-pill ${escapeHtml(hint.safety)}">${escapeHtml(hint.tag)}</span>
+      </div>
+      ${hint.description ? `<div class="hover-tooltip-desc">${escapeHtml(hint.description)}</div>` : ''}
+    ` : '';
     elHoverTooltip.innerHTML = `
+      ${hintBlock}
       <div class="hover-tooltip-path">L${item.absDepth} · ${escapeHtml(targetPath)}</div>
       <div class="hover-tooltip-meta">
         <span><strong>${fmtBytes(item.node.size)}</strong></span>
@@ -876,8 +967,59 @@
         e.preventDefault();
         undoTrash();
       }
+    } else if (state.viewMode === 'icicle' && (e.metaKey || e.ctrlKey)) {
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        scheduleVerticalZoom(state.vZoom * 1.35);
+      } else if (e.key === '-') {
+        e.preventDefault();
+        scheduleVerticalZoom(state.vZoom / 1.35);
+      } else if (e.key === '0') {
+        e.preventDefault();
+        scheduleVerticalZoom(1);
+      }
     }
   });
+
+  if (elBtnZoomReset) {
+    elBtnZoomReset.addEventListener('click', () => {
+      scheduleVerticalZoom(1);
+    });
+  }
+
+  // Trackpad two-finger pinch-to-zoom (vertical-only expansion)
+  let gestureActive = false;
+  let gestureStartZoom = 1;
+  let gestureAnchorY = null;
+
+  elViewport.addEventListener('gesturestart', (e) => {
+    if (state.viewMode !== 'icicle') return;
+    e.preventDefault();
+    gestureActive = true;
+    gestureStartZoom = state.vZoom;
+    gestureAnchorY = typeof e.clientY === 'number' ? e.clientY : null;
+  }, { passive: false });
+
+  elViewport.addEventListener('gesturechange', (e) => {
+    if (state.viewMode !== 'icicle' || !gestureActive) return;
+    e.preventDefault();
+    const anchorY = typeof e.clientY === 'number' ? e.clientY : gestureAnchorY;
+    scheduleVerticalZoom(gestureStartZoom * (e.scale || 1), anchorY);
+  }, { passive: false });
+
+  elViewport.addEventListener('gestureend', (e) => {
+    if (!gestureActive) return;
+    e.preventDefault();
+    gestureActive = false;
+  }, { passive: false });
+
+  elViewport.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey || state.viewMode !== 'icicle') return;
+    e.preventDefault();
+    if (gestureActive) return;
+    const factor = Math.exp(-e.deltaY * 0.01);
+    scheduleVerticalZoom(state.vZoom * factor, e.clientY);
+  }, { passive: false });
 
   elModeScroll.addEventListener('click', () => {
     state.layoutMode = 'scroll';

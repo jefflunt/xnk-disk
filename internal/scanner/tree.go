@@ -39,6 +39,7 @@ type ViewNode struct {
 	IsDir       bool       `json:"isDir"`
 	IsGrouped   bool       `json:"isGrouped,omitempty"`
 	IsSystemGap bool       `json:"isSystemGap,omitempty"`
+	Hint        *NodeHint  `json:"hint,omitempty"`
 	Children    []ViewNode `json:"children,omitempty"`
 }
 
@@ -240,8 +241,8 @@ func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (Vie
 	minBytes := uint64(float64(scaleBytes) * minFraction)
 
 	deepest := 0
-	var build func(cur *Node, depth int) ViewNode
-	build = func(cur *Node, depth int) ViewNode {
+	var build func(cur, parent *Node, depth int) ViewNode
+	build = func(cur, parent *Node, depth int) ViewNode {
 		if depth > deepest {
 			deepest = depth
 		}
@@ -254,6 +255,7 @@ func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (Vie
 			Dirs:     cur.Dirs,
 			Skipped:  cur.Skipped,
 			IsDir:    cur.IsDir,
+			Hint:     ClassifyNode(cur, parent),
 		}
 		if (maxDepth > 0 && depth >= maxDepth) || len(cur.Children) == 0 {
 			return vn
@@ -276,7 +278,7 @@ func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (Vie
 				otherCount++
 				continue
 			}
-			kept = append(kept, build(child, depth+1))
+			kept = append(kept, build(child, cur, depth+1))
 		}
 
 		if otherCount > 0 {
@@ -284,7 +286,7 @@ func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (Vie
 				// Don't bother wrapping a single item as "Other (1)"
 				for _, child := range cur.Children {
 					if child.Size > 0 && child.Size < minBytes {
-						kept = append(kept, build(child, depth+1))
+						kept = append(kept, build(child, cur, depth+1))
 						break
 					}
 				}
@@ -309,5 +311,5 @@ func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (Vie
 		return vn
 	}
 
-	return build(n, 0), deepest
+	return build(n, nil, 0), deepest
 }
