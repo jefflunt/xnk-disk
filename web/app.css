@@ -422,6 +422,13 @@ html, body {
   background: rgba(244, 63, 94, 0.20);
   color: #ffffff;
 }
+.ctx-item.rebuilds {
+  color: #6ee7b7;
+}
+.ctx-item.rebuilds:hover {
+  background: rgba(16, 185, 129, 0.18);
+  color: #ffffff;
+}
 
 /* Action Toast */
 .toast {

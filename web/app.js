@@ -37,6 +37,7 @@
   const elBtnUndoLabel = document.getElementById('btn-undo-label');
   const elBtnTrash = document.getElementById('btn-trash');
   const elBtnReveal = document.getElementById('btn-reveal');
+  const elBtnRules = document.getElementById('btn-rules');
   const elBreadcrumbs = document.getElementById('breadcrumbs');
   const elCacheLegend = document.getElementById('cache-legend');
   const elDepthHint = document.getElementById('depth-hint');
@@ -110,7 +111,7 @@
     }
   }
 
-  async function loadTree(volumeId, path) {
+  async function loadTree(volumeId, path, opts = {}) {
     const params = new URLSearchParams({
       volume: volumeId,
       path: path || '',
@@ -124,13 +125,21 @@
       renderAll();
       return;
     }
+    const prevTop = elViewport.scrollTop;
+    const prevLeft = elViewport.scrollLeft;
     state.treeData = await res.json();
     state.currentPath = state.treeData.root.path;
     state.viewMode = 'icicle';
-    state.vZoom = 1;
-    targetVZoom = 1;
-    elViewport.scrollTop = 0;
+    if (!opts.preserveView) {
+      state.vZoom = 1;
+      targetVZoom = 1;
+      elViewport.scrollTop = 0;
+    }
     renderAll();
+    if (opts.preserveView) {
+      elViewport.scrollTop = prevTop;
+      elViewport.scrollLeft = prevLeft;
+    }
   }
 
   async function startScan(volumeId) {
@@ -226,6 +235,50 @@
     });
   }
 
+  let rulesFileOpened = false;
+
+  async function markRuleRebuilds(path, label) {
+    const res = await fetch('/api/rules/mark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, label })
+    });
+    if (!res.ok) {
+      showToast('Could not save custom rule', { error: true });
+      return;
+    }
+    showToast(`Marked "${label}" as "Rebuilds itself"`);
+    if (state.viewMode === 'icicle' && state.treeData) {
+      await loadTree(state.treeData.volumeId, state.currentPath, { preserveView: true });
+    }
+  }
+
+  async function unmarkRule(path, label) {
+    const res = await fetch('/api/rules/unmark', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path })
+    });
+    if (!res.ok) {
+      showToast('Could not update custom rules', { error: true });
+      return;
+    }
+    showToast(`Removed "Rebuilds itself" tag from "${label}"`);
+    if (state.viewMode === 'icicle' && state.treeData) {
+      await loadTree(state.treeData.volumeId, state.currentPath, { preserveView: true });
+    }
+  }
+
+  async function openRulesFile() {
+    const res = await fetch('/api/rules/open', { method: 'POST' });
+    if (!res.ok) {
+      showToast('Could not open rules.json', { error: true });
+      return;
+    }
+    rulesFileOpened = true;
+    showToast('Opened rules.json — edits reload automatically when you return');
+  }
+
   const PROTECTED_PATHS = new Set([
     '/', '/System', '/Library', '/Users', '/Applications',
     '/Volumes', '/private', '/usr', '/bin', '/sbin', '/etc', '/var', '/dev', '/opt'
@@ -275,6 +328,13 @@
     if (!n.path.endsWith('(direct files)')) {
       items.push(`<button class="ctx-item" data-ctx="reveal"><span>Reveal in Finder</span></button>`);
     }
+    if (n.isDir && !n.path.endsWith('(direct files)') && n.path !== td.volumeId) {
+      if (n.hint && n.hint.safety === 'rebuilds') {
+        items.push(`<button class="ctx-item" data-ctx="unmark"><span>Remove "Rebuilds itself" tag</span></button>`);
+      } else {
+        items.push(`<button class="ctx-item rebuilds" data-ctx="mark"><span>Mark as "Rebuilds itself"</span></button>`);
+      }
+    }
     if (canTrash) {
       items.push(`<button class="ctx-item danger" data-ctx="trash"><span>Move to Trash</span><span style="font-family:'SF Mono',monospace;font-size:10.5px;opacity:0.8">${fmtBytes(n.size)}</span></button>`);
     }
@@ -306,6 +366,8 @@
         closeContextMenu();
         if (action === 'zoom') loadTree(td.volumeId, n.path);
         else if (action === 'reveal') revealInFinder(n.path);
+        else if (action === 'mark') markRuleRebuilds(n.path, n.name);
+        else if (action === 'unmark') unmarkRule(n.path, n.name);
         else if (action === 'trash') moveToTrash(td.volumeId, n.path);
       });
     });
@@ -444,6 +506,7 @@
       elBreadcrumbs.innerHTML = `<span class="crumb-btn current">Installed Drives</span>`;
       elDepthHint.textContent = 'Used vs. Available';
       elBtnReveal.classList.add('hidden');
+      if (elBtnRules) elBtnRules.classList.add('hidden');
       elBtnTrash.classList.add('hidden');
       if (elCacheLegend) elCacheLegend.classList.add('hidden');
       return;
@@ -476,6 +539,7 @@
     const baseLevel = Math.max(0, crumbs.length - 1);
     elDepthHint.textContent = `Levels L${baseLevel} → L${baseLevel + state.treeData.maxDepth}`;
     elBtnReveal.classList.remove('hidden');
+    if (elBtnRules) elBtnRules.classList.remove('hidden');
 
     const rootNode = state.treeData.root;
     if (isTrashable(rootNode, state.treeData.volumeId)) {
@@ -979,6 +1043,18 @@
   elBtnReveal.addEventListener('click', () => {
     if (state.treeData && state.treeData.root) {
       revealInFinder(state.treeData.root.path);
+    }
+  });
+
+  if (elBtnRules) {
+    elBtnRules.addEventListener('click', openRulesFile);
+  }
+
+  window.addEventListener('focus', () => {
+    if (!rulesFileOpened) return;
+    rulesFileOpened = false;
+    if (state.viewMode === 'icicle' && state.treeData) {
+      loadTree(state.treeData.volumeId, state.currentPath, { preserveView: true });
     }
   });
 

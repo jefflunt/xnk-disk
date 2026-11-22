@@ -223,6 +223,11 @@ func addNodeStats(ancestor, child *Node) {
 // ProjectView builds a pruned ViewNode hierarchy rooted at n, up to maxDepth levels deep
 // (maxDepth <= 0 means unlimited depth), ensuring the UI stays snappy at 60fps.
 func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (ViewNode, int) {
+	return ProjectViewWithRules(n, maxDepth, groupSmall, scaleBytes, nil)
+}
+
+// ProjectViewWithRules behaves like ProjectView while applying user-configured cache rules.
+func ProjectViewWithRules(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64, rules *CustomRulesConfig) (ViewNode, int) {
 	if scaleBytes == 0 {
 		scaleBytes = n.Size
 	}
@@ -255,7 +260,7 @@ func ProjectView(n *Node, maxDepth int, groupSmall bool, scaleBytes uint64) (Vie
 			Dirs:     cur.Dirs,
 			Skipped:  cur.Skipped,
 			IsDir:    cur.IsDir,
-			Hint:     ClassifyNode(cur, parent),
+			Hint:     ClassifyNodeWithRules(cur, parent, rules),
 		}
 		if (maxDepth > 0 && depth >= maxDepth) || len(cur.Children) == 0 {
 			return vn

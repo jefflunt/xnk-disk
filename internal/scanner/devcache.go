@@ -24,6 +24,7 @@ type NodeHint struct {
 	Tag         string `json:"tag"`
 	Safety      string `json:"safety"`
 	Description string `json:"description"`
+	Custom      bool   `json:"custom,omitempty"`
 }
 
 type pathRule struct {

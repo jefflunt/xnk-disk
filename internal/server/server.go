@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -34,6 +35,7 @@ type undoEntry struct {
 type Server struct {
 	mu           sync.RWMutex
 	cacheDir     string
+	rulesPath    string
 	results      map[string]*scanner.Result
 	undoStack    []undoEntry
 	activeScan   *scanner.Scanner
@@ -56,8 +58,9 @@ func New() *Server {
 	cacheDir := scanner.DefaultCacheDir()
 	cached := scanner.LoadAllCache(cacheDir)
 	return &Server{
-		cacheDir: cacheDir,
-		results:  cached,
+		cacheDir:  cacheDir,
+		rulesPath: scanner.DefaultRulesPath(),
+		results:   cached,
 	}
 }
 
@@ -79,6 +82,9 @@ func (s *Server) Start() (string, error) {
 	mux.HandleFunc("POST /api/trash", s.handleTrash)
 	mux.HandleFunc("POST /api/trash/undo", s.handleTrashUndo)
 	mux.HandleFunc("GET /api/trash/status", s.handleTrashStatus)
+	mux.HandleFunc("POST /api/rules/mark", s.handleRulesMark)
+	mux.HandleFunc("POST /api/rules/unmark", s.handleRulesUnmark)
+	mux.HandleFunc("POST /api/rules/open", s.handleRulesOpen)
 
 	staticFS, err := fs.Sub(web.Assets, ".")
 	if err != nil {
@@ -304,7 +310,8 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 		scaleBytes = volInfo.TotalBytes
 	}
 
-	viewRoot, deepest := scanner.ProjectView(focusNode, maxDepth, groupSmall, scaleBytes)
+	rules, _ := scanner.LoadCustomRules(s.rulesPath)
+	viewRoot, deepest := scanner.ProjectViewWithRules(focusNode, maxDepth, groupSmall, scaleBytes, rules)
 
 	resp := scanner.TreeResponse{
 		VolumeID:    res.VolumeID,
@@ -337,6 +344,72 @@ func (s *Server) handleReveal(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean(req.Path)
 	_ = exec.Command("open", "-R", clean).Start()
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRulesMark(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path  string `json:"path"`
+		Label string `json:"label"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	clean := filepath.Clean(req.Path)
+	home, _ := os.UserHomeDir()
+
+	s.mu.Lock()
+	cfg, _ := scanner.LoadCustomRules(s.rulesPath)
+	cfg.MarkPathRebuilds(clean, req.Label, home)
+	err := scanner.SaveCustomRules(s.rulesPath, cfg)
+	s.mu.Unlock()
+
+	if err != nil {
+		http.Error(w, "failed to save custom rules: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": clean})
+}
+
+func (s *Server) handleRulesUnmark(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	clean := filepath.Clean(req.Path)
+	home, _ := os.UserHomeDir()
+	dummy := &scanner.Node{Name: filepath.Base(clean), Path: clean, IsDir: true}
+	hasBuiltin := scanner.ClassifyNode(dummy, nil) != nil
+
+	s.mu.Lock()
+	cfg, _ := scanner.LoadCustomRules(s.rulesPath)
+	cfg.UnmarkPath(clean, home, hasBuiltin)
+	err := scanner.SaveCustomRules(s.rulesPath, cfg)
+	s.mu.Unlock()
+
+	if err != nil {
+		http.Error(w, "failed to save custom rules: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": clean})
+}
+
+func (s *Server) handleRulesOpen(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	err := scanner.EnsureRulesFile(s.rulesPath)
+	rulesPath := s.rulesPath
+	s.mu.Unlock()
+	if err != nil || rulesPath == "" {
+		http.Error(w, "could not prepare rules.json", http.StatusInternalServerError)
+		return
+	}
+	if err := exec.Command("open", rulesPath).Start(); err != nil {
+		_ = exec.Command("open", "-t", rulesPath).Start()
+	}
+	writeJSON(w, map[string]any{"ok": true, "path": rulesPath})
 }
 
 func (s *Server) undoSummaryLocked() (int, string) {
