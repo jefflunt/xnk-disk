@@ -26,11 +26,11 @@ final class AppModel: ObservableObject {
     @Published var volumes: [VolumeInfo] = []
     @Published var selectedVolumeID: String = ""
     @Published var viewMode: ViewMode = .overview
-    @Published var layoutMode: LayoutMode = .scroll
-    @Published var maxDepth: Int = 10
-    @Published var groupSmall: Bool = false
-    @Published var hideFreeSpace: Bool = false
-    @Published var highlightRebuildsOnly: Bool = false
+    @Published var layoutMode: LayoutMode = .scroll { didSet { persistPreferences() } }
+    @Published var maxDepth: Int = 10 { didSet { persistPreferences() } }
+    @Published var groupSmall: Bool = false { didSet { persistPreferences() } }
+    @Published var hideFreeSpace: Bool = false { didSet { persistPreferences() } }
+    @Published var highlightRebuildsOnly: Bool = false { didSet { persistPreferences() } }
     @Published var vZoom: CGFloat = 1.0
 
     @Published var isScanning: Bool = false
@@ -61,10 +61,31 @@ final class AppModel: ObservableObject {
         return TrashManager.isTrashable(path: root.path, volumeID: vol.id)
     }
 
+    private var isBootstrapping: Bool = true
+
     init() {
+        let prefs = PreferencesStore.load()
+        layoutMode = LayoutMode(rawValue: prefs.layoutModeRaw) ?? .scroll
+        maxDepth = prefs.maxDepth
+        groupSmall = prefs.groupSmall
+        hideFreeSpace = prefs.hideFreeSpace
+        highlightRebuildsOnly = prefs.highlightRebuildsOnly
+        isBootstrapping = false
+
         customRules = CustomRulesStore.load()
         scanResults = ScanCacheStore.loadAll()
         refreshVolumes()
+    }
+
+    private func persistPreferences() {
+        guard !isBootstrapping else { return }
+        PreferencesStore.save(ViewPreferences(
+            layoutModeRaw: layoutMode.rawValue,
+            maxDepth: maxDepth,
+            groupSmall: groupSmall,
+            hideFreeSpace: hideFreeSpace,
+            highlightRebuildsOnly: highlightRebuildsOnly
+        ))
     }
 
     func refreshVolumes() {
@@ -127,9 +148,6 @@ final class AppModel: ObservableObject {
         isAtVolumeRoot = isRoot
         currentPath = projected.path
         hasVisibleRebuilds = containsRebuildsHint(projected)
-        if !hasVisibleRebuilds {
-            highlightRebuildsOnly = false
-        }
         if resetZoom {
             vZoom = 1.0
         }

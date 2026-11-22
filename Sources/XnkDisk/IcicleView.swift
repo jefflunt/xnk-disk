@@ -88,7 +88,7 @@ struct IcicleRepresentable: NSViewRepresentable {
                 maxDepth: model.deepestLevel,
                 layoutMode: model.layoutMode,
                 hideFreeSpace: model.hideFreeSpace,
-                highlightRebuildsOnly: model.highlightRebuildsOnly,
+                highlightRebuildsOnly: model.highlightRebuildsOnly && model.hasVisibleRebuilds,
                 vZoom: model.vZoom,
                 viewportSize: vpSize
             )

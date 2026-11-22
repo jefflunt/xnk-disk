@@ -195,4 +195,31 @@ final class XnkDiskCoreTests: XCTestCase {
         XCTAssertFalse(TrashManager.isTrashable(path: "/Users/alice/(direct files)", volumeID: "/"))
         XCTAssertTrue(TrashManager.isTrashable(path: "/Users/alice/Library/Developer/Xcode/DerivedData", volumeID: "/"))
     }
+
+    // MARK: - View Preferences Persistence
+    func testViewPreferencesPersistence() {
+        let suite = "com.jefflunt.xnk-disk.tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            XCTFail("Could not create isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Defaults on fresh install
+        let initial = PreferencesStore.load(from: defaults)
+        XCTAssertEqual(initial, ViewPreferences())
+
+        // Save customized toggle & view settings
+        let custom = ViewPreferences(
+            layoutModeRaw: "Fit",
+            maxDepth: 20,
+            groupSmall: true,
+            hideFreeSpace: true,
+            highlightRebuildsOnly: true
+        )
+        PreferencesStore.save(custom, to: defaults)
+
+        let reloaded = PreferencesStore.load(from: defaults)
+        XCTAssertEqual(reloaded, custom)
+    }
 }

@@ -9,7 +9,7 @@
 ### 1. Single-Process Native SwiftUI + AppKit Shell (`Sources/XnkDisk/`)
 - [XnkDiskApp.swift](../Sources/XnkDisk/XnkDiskApp.swift) launches a native macOS `WindowGroup` with dark appearance and keyboard shortcuts (`⌘Z` Undo, `⌘+`/`⌘−`/`⌘0` vertical zoom).
 - [AppModel.swift](../Sources/XnkDisk/AppModel.swift) is a `@MainActor ObservableObject` coordinating volume discovery, multi-core scans, live progress polling, Trash/Undo, custom rules, and view state directly in-process—eliminating any local HTTP server or `WKWebView` helper processes.
-- [ContentView.swift](../Sources/XnkDisk/ContentView.swift) uses native macOS controls: `Picker(.segmented)` for **Scrollable | Fit**, `Picker(.menu)` for **Depth**, canonical `.toggleStyle(.switch)` controls for **Group `<1.2%`**, **Hide Free Space**, and **Rebuildable**, SF Symbols, Drives Overview cards, floating frosted HUD tooltips, and action toasts.
+- [ContentView.swift](../Sources/XnkDisk/ContentView.swift) uses native macOS controls: `Picker(.segmented)` for **Scrollable | Fit**, `Picker(.menu)` for **Depth**, canonical `.toggleStyle(.switch)` controls for **Group `<1.2%`**, **Hide Free Space**, and **Rebuildable**, SF Symbols, Drives Overview cards, floating frosted HUD tooltips, and action toasts. All toolbar view toggles and layout/depth preferences persist automatically across launches via [UserPreferences.swift](../Sources/XnkDiskCore/UserPreferences.swift) (`UserDefaults`).
 
 ### 2. macOS Volume Discovery & APFS Handling (`Sources/XnkDiskCore/Volume.swift`)
 - Uses Darwin `getfsstat` (`MNT_NOWAIT`) to list mounted volumes instantly on launch with live **Used vs. Available** stats.
