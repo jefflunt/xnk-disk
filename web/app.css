@@ -531,14 +531,27 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 7px;
+  padding: 2.5px 8px;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.38);
+  background: rgba(16, 185, 129, 0.10);
+  border: 1px solid rgba(16, 185, 129, 0.35);
   color: #6ee7b7;
   font-size: 10.5px;
   font-weight: 500;
   white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+.cache-legend:hover {
+  background: rgba(16, 185, 129, 0.20);
+  border-color: rgba(16, 185, 129, 0.65);
+  color: #d1fae5;
+}
+.cache-legend.active {
+  background: rgba(16, 185, 129, 0.28);
+  border-color: rgba(110, 231, 183, 0.9);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.38);
 }
 .cache-legend-dot {
   width: 6px;

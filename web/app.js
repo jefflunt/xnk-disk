@@ -11,6 +11,8 @@
     layoutMode: 'scroll', // 'scroll' | 'fit'
     maxDepth: 10,         // 5 | 10 | 20 | 50 | 0 (unlimited)
     groupSmall: false,
+    hideFreeSpace: false,
+    highlightRebuildsOnly: false,
     vZoom: 1,             // Vertical-only zoom factor (1..25)
     scanning: false,
     scanningVolumeId: null,
@@ -48,6 +50,7 @@
   const elModeFit = document.getElementById('mode-fit');
   const elSelectDepth = document.getElementById('select-depth');
   const elToggleGroup = document.getElementById('toggle-group');
+  const elToggleHideFree = document.getElementById('toggle-hide-free');
   const elBtnZoomReset = document.getElementById('btn-zoom-reset');
   const elContextMenu = document.getElementById('context-menu');
   const elToast = document.getElementById('toast');
@@ -667,10 +670,11 @@
     const maxCols = Math.max(2, td.maxDepth + 1);
     const cols = Array.from({ length: maxCols }, () => []);
 
-    const usedHeight = isRoot && td.totalBytes > 0
+    const showFree = isRoot && !state.hideFreeSpace && td.totalBytes > 0;
+    const usedHeight = showFree
       ? (Math.min(rootDisplaySize, td.totalBytes) / td.totalBytes) * totalH
       : totalH;
-    const scaleBytes = isRoot ? td.totalBytes : Math.max(1, rootDisplaySize);
+    const scaleBytes = showFree ? td.totalBytes : Math.max(1, rootDisplaySize);
 
     let hasVisibleRebuilds = false;
 
@@ -716,11 +720,16 @@
     }
 
     walk(rootClone, 0, 0, usedHeight, 'var(--c0)', [], false);
+    if (!hasVisibleRebuilds) {
+      state.highlightRebuildsOnly = false;
+    }
     if (elCacheLegend) {
       elCacheLegend.classList.toggle('hidden', !hasVisibleRebuilds);
+      elCacheLegend.classList.toggle('active', state.highlightRebuildsOnly);
+      elCacheLegend.setAttribute('aria-pressed', state.highlightRebuildsOnly ? 'true' : 'false');
     }
 
-    if (isRoot && td.totalBytes > 0 && totalH - usedHeight >= 2) {
+    if (showFree && totalH - usedHeight >= 2) {
       cols[0].push({
         node: {
           name: 'Available Space',
@@ -798,6 +807,7 @@
 
     const modeCls = state.layoutMode === 'scroll' ? 'mode-scroll' : 'mode-fit';
     elViewport.innerHTML = `<div class="icicle-wrap ${modeCls}">${colsHtml}</div>`;
+    applyDefaultBlockStyles();
 
     // Attach fast event delegation on the container
     const wrap = elViewport.querySelector('.icicle-wrap');
@@ -844,15 +854,34 @@
     elHoverTooltip.style.top = Math.max(8, top) + 'px';
   }
 
-  function highlightLineage(idx, clientX, clientY) {
+  function applyDefaultBlockStyles() {
     const blocks = elViewport.querySelectorAll('.icicle-block');
-    if (idx < 0 || !state.renderedNodes[idx]) {
-      blocks.forEach(el => {
+    blocks.forEach(el => {
+      if (state.highlightRebuildsOnly) {
+        if (el.classList.contains('cache-rebuilds')) {
+          el.style.opacity = '1';
+          el.style.borderColor = 'rgba(167, 243, 208, 0.85)';
+          el.style.boxShadow = '0 0 0 1px rgba(16, 185, 129, 0.45)';
+          el.style.zIndex = '4';
+        } else {
+          el.style.opacity = '0.15';
+          el.style.borderColor = '';
+          el.style.boxShadow = 'none';
+          el.style.zIndex = '1';
+        }
+      } else {
         el.style.opacity = el.dataset.baseOpacity;
         el.style.boxShadow = 'none';
         el.style.borderColor = '';
         el.style.zIndex = '';
-      });
+      }
+    });
+  }
+
+  function highlightLineage(idx, clientX, clientY) {
+    const blocks = elViewport.querySelectorAll('.icicle-block');
+    if (idx < 0 || !state.renderedNodes[idx]) {
+      applyDefaultBlockStyles();
       elHoverTooltip.classList.add('hidden');
       return;
     }
@@ -1044,6 +1073,24 @@
       loadTree(state.treeData.volumeId, state.currentPath);
     }
   });
+
+  if (elToggleHideFree) {
+    elToggleHideFree.addEventListener('change', (e) => {
+      state.hideFreeSpace = e.target.checked;
+      if (state.viewMode === 'icicle' && state.treeData) {
+        renderIcicle();
+      }
+    });
+  }
+
+  if (elCacheLegend) {
+    elCacheLegend.addEventListener('click', () => {
+      state.highlightRebuildsOnly = !state.highlightRebuildsOnly;
+      elCacheLegend.classList.toggle('active', state.highlightRebuildsOnly);
+      elCacheLegend.setAttribute('aria-pressed', state.highlightRebuildsOnly ? 'true' : 'false');
+      applyDefaultBlockStyles();
+    });
+  }
 
   let resizeTimer = null;
   window.addEventListener('resize', () => {
